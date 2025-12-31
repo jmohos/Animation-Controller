@@ -114,8 +114,8 @@ void App::loop() {
   // if (in.justPressed(Button::Right) && _model.selectedMotor < 15) _model.selectedMotor++; // up to 16 motors later
 
   // _model.showTimeMs = _show.currentTimeMs();
-  // _model.speedNorm  = in.potSpeedNorm;
-  // _model.accelNorm  = in.potAccelNorm;
+   _model.speedNorm  = in.potSpeedNorm;
+   _model.accelNorm  = in.potAccelNorm;
 
   _ui.render(_model);
 }
