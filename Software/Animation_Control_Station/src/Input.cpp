@@ -9,8 +9,15 @@ static SX1509 g_sx;
 
 static float readPotNorm(uint8_t pin) {
   const int v = analogRead(pin);
-  const float maxv = 1023.0f;
+  constexpr float maxv = 4095.0f;    // 12-bit peak for Teensy 4.1 ADC
+  constexpr float edgeDeadband = 0.01f; // 1% gap at each end to guarantee 0/100%
+
   float x = (float)v / maxv;
+  if (x <= edgeDeadband) return 0.0f;
+  if (x >= 1.0f - edgeDeadband) return 1.0f;
+
+  // Re-scale the middle so mid-span remains linear after deadband removal.
+  x = (x - edgeDeadband) / (1.0f - 2.0f * edgeDeadband);
   if (x < 0) x = 0;
   if (x > 1) x = 1;
   return x;
@@ -57,7 +64,7 @@ bool Input::begin() {
   initButtons();
   initLeds();
 
-  analogReadResolution(10);
+  analogReadResolution(12); // use highest supported resolution on Teensy 4.1
 
   LOGI("SX1509 initialized");
   return true;

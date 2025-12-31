@@ -1,5 +1,7 @@
 #pragma once
 #include <Arduino.h>
+#include <elapsedMillis.h>
+
 
 struct UiModel {
   bool playing = false;
@@ -11,6 +13,9 @@ struct UiModel {
 };
 
 class Ui {
+  elapsedMillis _time_since_last_render;
+  static constexpr unsigned long RENDER_PERIOD_MSEC = 100;
+
 public:
   void begin();
   void render(const UiModel& m);
