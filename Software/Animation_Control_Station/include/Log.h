@@ -5,6 +5,12 @@
 #define LOG_LEVEL 2
 #endif
 
+/**
+ * Description: Initialize the serial logger at the specified baud rate.
+ * Inputs:
+ * - baud: serial baud rate (default 115200).
+ * Outputs: Opens the Serial port and waits briefly for USB.
+ */
 inline void logInit(unsigned long baud = 115200) {
   Serial.begin(baud);
   // Don’t block forever if USB isn’t connected

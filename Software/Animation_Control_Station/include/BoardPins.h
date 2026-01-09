@@ -16,27 +16,27 @@ static constexpr uint8_t PIN_SX1509_INT   = 22;
 
 // SX1509 pin assignments (P0..P15)
 enum class SXPin : uint8_t {
-  Mode_Button   = 0,
-  Up_Button     = 1,
-  Down_Button   = 2,
-  Left_Button   = 3,
-  Right_Button  = 4,
-  OK_Button     = 5,
-  Play_Button   = 6,
-  Spare_Button  = 7,
+  BUTTON_OK     = 0,
+  BUTTON_DOWN   = 1,
+  BUTTON_UP     = 2,
+  BUTTON_LEFT   = 3,
+  BUTTON_RIGHT  = 4,
+  BUTTON_RED    = 5,
+  BUTTON_YELLOW = 6,
+  BUTTON_GREEN  = 7,
 
   LED_Red       = 8,
   LED_Yellow    = 9,
   LED_Green     = 10,
-  LED_Blue      = 11,
-  LED_Spare_1   = 12,
-  LED_Spare_2   = 13,
-  LED_Spare_3   = 14,
-  LED_Spare_4   = 15,
+  LED_SPARE_1   = 11,
+  LED_SPARE_2   = 12,
+  LED_SPARE_3   = 13,
+  LED_SPARE_4   = 14,
+  LED_SPARE_5   = 15,
 
-  Count
+  COUNT
 };
-static constexpr uint8_t SX1509_PIN_COUNT = static_cast<uint8_t>(SXPin::Count);
+static constexpr uint8_t SX1509_PIN_COUNT = static_cast<uint8_t>(SXPin::COUNT);
 
 // ---------------- Analog pots ----------------
 static constexpr uint8_t PIN_POT_SPEED = A16;

@@ -2,8 +2,30 @@
 #include "Log.h"
 #include "App.h"
 #include "BoardPins.h"
+#include "Faults.h"
 
+/**
+ * Description: Dispatch console commands for the application.
+ * Inputs:
+ * - msg: parsed command message.
+ * Outputs: Executes command handling logic.
+ */
+static void handleConsoleCommand(const CommandMsg &msg) {
+  LOGI("CONSOLE CMD: %s (args=%u)", msg.cmd, msg.argc);
+  for (uint8_t i = 0; i < msg.argc; i++) {
+    LOGI("  arg[%u]=%s", i, msg.argv[i]);
+  }
+}
+
+/**
+ * Description: Initialize application subsystems.
+ * Inputs: None.
+ * Outputs: Configures input, encoder, UI, show engine, and RS422 ports.
+ */
 void App::begin() {
+  _console.setDispatchCommand(handleConsoleCommand);
+  _console.begin();
+
   const bool ok = _input.begin();
   LOGI("Input begin: %s", ok ? "OK" : "FAIL");
 
@@ -19,34 +41,44 @@ void App::begin() {
   _model.selectedMotor = 0;
 }
 
+/**
+ * Description: Main application loop to update state and render UI.
+ * Inputs: None.
+ * Outputs: Updates model values and drives outputs each tick.
+ */
 void App::loop() {
-  auto in = _input.poll();
+  // Process console commands via USB serial of Teensy 4.1
+  _console.poll();
 
-  // encoder
-  in.encoderDelta = _enc.consumeDelta();
-  _model.jogPos += in.encoderDelta;
+  // Process button inputs from user interface.
+  InputState inputState = _input.poll();
 
+  // Update the jog wheel encoder counts.
+  inputState.encoderDelta = _enc.consumeDelta();
+  _model.jogPos += inputState.encoderDelta;
+
+  // TEST CODE
   // Periodic serial test messages (100 Hz per port)
   static uint32_t lastSerialTick = 0;
   static uint32_t serialSeq[8] = {0};
   if (millis() - lastSerialTick >= 10) {
     lastSerialTick = millis();
     for (uint8_t i = 0; i < 8; i++) {
-      auto* s = _rs422.port(i).serial;
-      if (s) {
-        s->printf("Hello from port %u, %lu\r\n", (unsigned)i + 1, (unsigned long)serialSeq[i]++);
+      auto* serialPort = _rs422.port(i).serial;
+      if (serialPort) {
+        serialPort->printf("Hello from port %u, %lu\r\n", (unsigned)i + 1, (unsigned long)serialSeq[i]++);
       }
     }
   }
 
   for (uint8_t i = 0; i < 8; i++) {
-    auto* s = _rs422.port(i).serial;
-    if (s) {
+    auto* serialPort = _rs422.port(i).serial;
+    if (serialPort) {
       static char line[64];
       line[0] = '\0';
       uint8_t count = 0;
-      while (s->available() && count < 16) {
-        const int b = s->read();
+      while (serialPort->available() && count < 16) {
+        const int b = serialPort->read();
         const int written = snprintf(line + count * 3, sizeof(line) - count * 3, "%02X ", b & 0xFF);
         (void)written;
         count++;
@@ -58,7 +90,7 @@ void App::loop() {
     }
   }
   
-  if (in.justPressed(Button::Mode)) {
+  if (inputState.justPressed(Button::Mode)) {
     if (_input.getLedMode(SXPin::LED_Red) == LedMode::Off) {
       _input.setLedMode(SXPin::LED_Red, LedMode::On);
       Serial.println("Red LED to ON");
@@ -68,7 +100,7 @@ void App::loop() {
     }    
   }
 
-  if (in.justPressed(Button::Up)) {
+  if (inputState.justPressed(Button::Up)) {
     if (_input.getLedMode(SXPin::LED_Yellow) == LedMode::Off) {
       _input.setLedMode(SXPin::LED_Yellow, LedMode::Blink);
       Serial.println("Yellow LED to Blink");
@@ -78,7 +110,7 @@ void App::loop() {
     }    
   }
 
-    if (in.justPressed(Button::Down)) {
+    if (inputState.justPressed(Button::Down)) {
     if (_input.getLedMode(SXPin::LED_Green) == LedMode::Off) {
       _input.setLedMode(SXPin::LED_Green, LedMode::Blink, 200, 800);
       Serial.println("Green LED to Blink");
@@ -88,6 +120,11 @@ void App::loop() {
     }    
   }
 
+  for (uint8_t i = 0; i < 8; i++) {
+    if (inputState.justPressed((Button)i)) {
+      Serial.printf("BUTTON %d pressed!\n", i);
+    }
+  }
   // // Button test: log events and mirror button->LED
   //   const char* names[8] = {"Mode","Up","Down","Left","Right","OK","Play","Spare"};
   //   for (uint8_t i = 0; i < 8; i++) {
@@ -102,7 +139,7 @@ void App::loop() {
   //   }
 
   // // play toggle
-  // if (in.justPressed(Button::Play)) {
+  // if (inputState.justPressed(Button::Play)) {
   //   _model.playing = !_model.playing;
   //   _show.setPlaying(_model.playing);
   //   _input.setPlayLed(_model.playing);
@@ -110,18 +147,24 @@ void App::loop() {
   // }
 
   // // simple motor select with left/right for now
-  // if (in.justPressed(Button::Left)  && _model.selectedMotor > 0) _model.selectedMotor--;
-  // if (in.justPressed(Button::Right) && _model.selectedMotor < 15) _model.selectedMotor++; // up to 16 motors later
+  // if (inputState.justPressed(Button::Left)  && _model.selectedMotor > 0) _model.selectedMotor--;
+  // if (inputState.justPressed(Button::Right) && _model.selectedMotor < 15) _model.selectedMotor++; // up to 16 motors later
 
   // _model.showTimeMs = _show.currentTimeMs();
-   _model.speedNorm  = in.potSpeedNorm;
-   _model.accelNorm  = in.potAccelNorm;
+   _model.speedNorm  = inputState.potSpeedNorm;
+   _model.accelNorm  = inputState.potAccelNorm;
 
+  // Update the user interface outputs with latest status.
   _ui.render(_model);
 }
 
 App g_app;
 
+/**
+ * Description: Arduino setup entry point.
+ * Inputs: None.
+ * Outputs: Initializes logging and application subsystems.
+ */
 void setup() {
   logInit(115200);
   LOGI("Boot");
@@ -129,6 +172,11 @@ void setup() {
   g_app.begin();
 }
 
+/**
+ * Description: Arduino loop entry point.
+ * Inputs: None.
+ * Outputs: Runs the application loop continuously.
+ */
 void loop() {
   g_app.loop();
 }

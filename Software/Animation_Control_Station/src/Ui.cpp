@@ -1,5 +1,6 @@
 #include "Ui.h"
 #include "BoardPins.h"
+#include "Faults.h"
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include "DisplayConfig.h"
@@ -14,7 +15,8 @@
 #if defined(DISPLAY_ILI9341_T4)
 // Optimized ILI9341 driver (DMA, double-buffered)
 static constexpr uint32_t ILI9341_SPI_HZ = 30000000;
-static ILI9341Wrapper tft(PIN_LCD_CS, PIN_LCD_DC, 13, 11, 12, PIN_LCD_RST);
+// MISO disabled to allow MOSI-only display wiring.
+static ILI9341Wrapper tft(PIN_LCD_CS, PIN_LCD_DC, 13, 11, 255, PIN_LCD_RST);
 DMAMEM static uint16_t ili_internal_fb[320 * 240];
 static ILI9341_T4::DiffBuffStatic<40000> diff1;
 static ILI9341_T4::DiffBuffStatic<40000> diff2;
@@ -31,6 +33,11 @@ static GFXcanvas16* canvas = nullptr;
 static constexpr uint16_t COLOR_BLACK = 0x0000;
 static constexpr uint16_t COLOR_WHITE = 0xFFFF;
 
+/**
+ * Description: Flush the current canvas buffer to the display.
+ * Inputs: None.
+ * Outputs: Sends the canvas buffer to the display driver.
+ */
 static void flushCanvas() {
   if (!canvas) return;
 #if defined(DISPLAY_ILI9341_T4)
@@ -40,12 +47,22 @@ static void flushCanvas() {
 #endif
 }
 
+/**
+ * Description: Initialize the display driver and draw the startup screen.
+ * Inputs: None.
+ * Outputs: Configures the display and initializes the canvas buffer.
+ */
 void Ui::begin() {
+  _ready = false;
   SPI.begin(); // init SPI0 before the driver starts transactions
 
 #if defined(DISPLAY_ILI9341_T4)
   tft.output(nullptr);
-  while (!tft.begin(ILI9341_SPI_HZ)) {}
+  if (!tft.begin(ILI9341_SPI_HZ)) {
+    FAULT_SET(FAULT_LCD_DISPLAY_FAULT);
+    return;
+  }
+  tft.invertDisplay(true);
   tft.setRotation(3); // 1 = landscape 320x240
   tft.setFramebuffer(ili_internal_fb);
   tft.setDiffBuffers(&diff1, &diff2);
@@ -58,6 +75,10 @@ void Ui::begin() {
 #endif
 
   canvas = new GFXcanvas16(tft.width(), tft.height());
+  if (!canvas) {
+    FAULT_SET(FAULT_LCD_DISPLAY_FAULT);
+    return;
+  }
 #if defined(DISPLAY_ILI9341_T4)
   tft.setCanvas(canvas->getBuffer(), tft.width(), tft.height());
 #endif
@@ -69,14 +90,24 @@ void Ui::begin() {
   canvas->setTextColor(COLOR_WHITE);
   canvas->print("Float Show Ctrl");
   flushCanvas();
+  _ready = true;
 }
 
-void Ui::render(const UiModel& m) {
+/**
+ * Description: Render the main UI at a fixed cadence.
+ * Inputs:
+ * - model: UI model data to draw.
+ * Outputs: Updates the canvas and flushes to the display.
+ */
+void Ui::render(const UiModel& model) {
+  if (!_ready) {
+    return;
+  }
 
-  if (_time_since_last_render < RENDER_PERIOD_MSEC)
+  if (_timeSinceLastRender < RENDER_PERIOD_MSEC)
     return;
 
-  _time_since_last_render = 0;
+  _timeSinceLastRender = 0;
 
   #ifdef TEST_GRID
   // Screen perimeter test pattern
@@ -132,29 +163,30 @@ canvas->drawFastHLine(114, tft.height()-10, 36, ILI9341_T4_COLOR_BLACK);
 // Green box guide
 canvas->setCursor(222, tft.height()-30);
 canvas->setTextColor(ILI9341_T4_COLOR_BLACK);
-canvas->printf("CHAN %d", m.selectedMotor);
+canvas->printf("CHAN %d", model.selectedMotor);
 // Underline the active selection
 canvas->drawFastHLine(282, tft.height()-10, 16, ILI9341_T4_COLOR_BLACK);
 
 // Main status area
 canvas->setCursor(0, 48);
 canvas->setTextColor(ILI9341_T4_COLOR_WHITE);
-canvas->printf("SPEED: %3d%%\n", (int)(m.speedNorm * 100.0f));
-canvas->printf("ACCEL: %3d%%\n", (int)(m.accelNorm * 100.0f));
+canvas->printf("SPEED: %3d%%\n", (int)(model.speedNorm * 100.0f));
+canvas->printf("ACCEL: %3d%%\n", (int)(model.accelNorm * 100.0f));
+auto stats = tft.statsFPS();
+canvas->printf("FPS: %f\n", stats.avg());
 
+// simple overwrite HUD area
+// canvas->fillRect(0, 40, tft.width(), tft.height() - 80, COLOR_BLACK);
+// canvas->setCursor(10, 50);
+// canvas->setTextSize(2);
 
-  // simple overwrite HUD area
-  // canvas->fillRect(0, 40, tft.width(), tft.height() - 80, COLOR_BLACK);
-  // canvas->setCursor(10, 50);
-  // canvas->setTextSize(2);
-
-  // canvas->setTextColor(ILI9341_T4_COLOR_RED);
-  // canvas->printf("Mode: %s\n", m.playing ? "PLAY" : "PAUSE");
-  // canvas->setTextColor(ILI9341_T4_COLOR_GREEN);
-  // canvas->printf("t: %lu ms\n", (unsigned long)m.showTimeMs);
-  // canvas->printf("Motor: %u\n", m.selectedMotor);
-  // canvas->printf("Speed: %d%%\n", (int)(m.speedNorm * 100.0f));
-  // canvas->printf("Accel: %d%%\n", (int)(m.accelNorm * 100.0f));
-  // canvas->printf("Jog: %ld\n", (long)m.jogPos);
-  flushCanvas();
+// canvas->setTextColor(ILI9341_T4_COLOR_RED);
+// canvas->printf("Mode: %s\n", model.playing ? "PLAY" : "PAUSE");
+// canvas->setTextColor(ILI9341_T4_COLOR_GREEN);
+// canvas->printf("t: %lu ms\n", (unsigned long)model.showTimeMs);
+// canvas->printf("Motor: %u\n", model.selectedMotor);
+// canvas->printf("Speed: %d%%\n", (int)(model.speedNorm * 100.0f));
+// canvas->printf("Accel: %d%%\n", (int)(model.accelNorm * 100.0f));
+// canvas->printf("Jog: %ld\n", (long)model.jogPos);
+flushCanvas();
 }

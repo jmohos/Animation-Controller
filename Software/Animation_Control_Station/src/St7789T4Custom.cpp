@@ -54,6 +54,15 @@ static const uint8_t PROGMEM initList[] = {
     255                   // 255 = 500 ms delay
 };
 
+/**
+ * Description: Construct a ST7789 driver with explicit SPI pins.
+ * Inputs:
+ * - resolution: panel resolution enum.
+ * - CS, RS, SID, SCLK, RST: display control pins.
+ * - BKL: backlight pin (0xFF to disable).
+ * - spi_hz: SPI clock rate.
+ * Outputs: Initializes the base driver with pin configuration.
+ */
 St7789T4Custom::St7789T4Custom(St7789Resolution resolution, uint8_t CS, uint8_t RS,
                                uint8_t SID, uint8_t SCLK, uint8_t RST, uint8_t BKL,
                                uint32_t spi_hz)
@@ -62,6 +71,15 @@ St7789T4Custom::St7789T4Custom(St7789Resolution resolution, uint8_t CS, uint8_t 
   set_dimensions(resolution);
 }
 
+/**
+ * Description: Construct a ST7789 driver using default SPI pins.
+ * Inputs:
+ * - resolution: panel resolution enum.
+ * - CS, RS, RST: display control pins.
+ * - BKL: backlight pin (0xFF to disable).
+ * - spi_hz: SPI clock rate.
+ * Outputs: Initializes the base driver with pin configuration.
+ */
 St7789T4Custom::St7789T4Custom(St7789Resolution resolution, uint8_t CS, uint8_t RS,
                                uint8_t RST, uint8_t BKL, uint32_t spi_hz)
     : lcd_spi_driver_t4(2, true, spi_hz, CS, RS, RST) {
@@ -69,13 +87,30 @@ St7789T4Custom::St7789T4Custom(St7789Resolution resolution, uint8_t CS, uint8_t 
   set_dimensions(resolution);
 }
 
+/**
+ * Description: Get the display width with rotation applied.
+ * Inputs: None.
+ * Outputs: Returns width in pixels.
+ */
 uint16_t St7789T4Custom::width() const {
   return (rotation() & 1) ? _native_height : _native_width;
 }
+
+/**
+ * Description: Get the display height with rotation applied.
+ * Inputs: None.
+ * Outputs: Returns height in pixels.
+ */
 uint16_t St7789T4Custom::height() const {
   return (rotation() & 1) ? _native_width : _native_height;
 }
 
+/**
+ * Description: Apply the native dimensions for the selected panel.
+ * Inputs:
+ * - resolution: panel resolution enum.
+ * Outputs: Updates native width and height members.
+ */
 void St7789T4Custom::set_dimensions(St7789Resolution resolution) {
   switch (resolution) {
     case St7789Resolution::ST7789_135x240:
@@ -109,6 +144,11 @@ void St7789T4Custom::set_dimensions(St7789Resolution resolution) {
   }
 }
 
+/**
+ * Description: Initialize the panel with the ST7789 command list.
+ * Inputs: None.
+ * Outputs: Sends initialization sequence and configures backlight.
+ */
 void St7789T4Custom::initialize(void) {
   uint8_t numCommands, numArgs;
   uint16_t ms;
@@ -152,6 +192,13 @@ void St7789T4Custom::initialize(void) {
   end_transaction();
 }
 
+/**
+ * Description: Set the address window for pixel writes.
+ * Inputs:
+ * - x1, y1: top-left coordinate.
+ * - x2, y2: bottom-right coordinate.
+ * Outputs: Updates the panel address window registers.
+ */
 void St7789T4Custom::write_address_window(int x1, int y1, int x2, int y2) {
   x1 += _offset_x;
   x2 += _offset_x;
@@ -166,22 +213,28 @@ void St7789T4Custom::write_address_window(int x1, int y1, int x2, int y2) {
   write_command_last(ST7789_RAMWR);
 }
 
+/**
+ * Description: Set rotation and adjust offsets for panel variants.
+ * Inputs:
+ * - value: rotation index [0..3].
+ * Outputs: Updates MADCTL and internal offsets.
+ */
 void St7789T4Custom::set_rotation(int value) {
   begin_transaction();
   write_command_last(ST7789_MADCTL);
   switch (value & 3) {
     case 0:  // Portrait
-        if (_native_width == 135) {
-          _offset_x = 52;
-          _offset_y = 40;
-        } else if (_native_height == 280) {
-          _offset_x = 0;
-          _offset_y = 20; // Waveshare 240x280: panel expects 20px top offset
-        } else if (_native_width == 172) {
-          _offset_x = 34;
-          _offset_y = 0;
-        } else if (_native_width == 170) {
-          _offset_x = 35;
+      if (_native_width == 135) {
+        _offset_x = 52;
+        _offset_y = 40;
+      } else if (_native_height == 280) {
+        _offset_x = 0;
+        _offset_y = 20; // Waveshare 240x280: panel expects 20px top offset
+      } else if (_native_width == 172) {
+        _offset_x = 34;
+        _offset_y = 0;
+      } else if (_native_width == 170) {
+        _offset_x = 35;
         _offset_y = 0;
       } else {
         _offset_x = 0;
@@ -191,17 +244,17 @@ void St7789T4Custom::set_rotation(int value) {
       break;
 
     case 1:  // Landscape
-          if (_native_width == 135) {
-            _offset_x = 40;
-            _offset_y = 53;
-          } else if (_native_height == 280) {
-            _offset_x = 20;
-            _offset_y = 0; // Waveshare 240x280: panel expects 20px left offset
-          } else if (_native_width == 172) {
-            _offset_x = 0;
-            _offset_y = 34;
-          } else if (_native_width == 170) {
-            _offset_x = 0;
+      if (_native_width == 135) {
+        _offset_x = 40;
+        _offset_y = 53;
+      } else if (_native_height == 280) {
+        _offset_x = 20;
+        _offset_y = 0; // Waveshare 240x280: panel expects 20px left offset
+      } else if (_native_width == 172) {
+        _offset_x = 0;
+        _offset_y = 34;
+      } else if (_native_width == 170) {
+        _offset_x = 0;
         _offset_y = 35;
       } else {
         _offset_x = 0;
@@ -211,17 +264,17 @@ void St7789T4Custom::set_rotation(int value) {
       break;
 
     case 2:  // Inverted portrait
-        if (_native_width == 135) {
-          _offset_x = 53;
-          _offset_y = 40;
-        } else if (_native_height == 280) {
-          _offset_x = 0;
-          _offset_y = 20; // Waveshare 240x280: panel expects 20px top offset
-        } else if (_native_width == 172) {
-          _offset_x = 34;
-          _offset_y = 0;
-        } else if (_native_width == 170) {
-          _offset_x = 35;
+      if (_native_width == 135) {
+        _offset_x = 53;
+        _offset_y = 40;
+      } else if (_native_height == 280) {
+        _offset_x = 0;
+        _offset_y = 20; // Waveshare 240x280: panel expects 20px top offset
+      } else if (_native_width == 172) {
+        _offset_x = 34;
+        _offset_y = 0;
+      } else if (_native_width == 170) {
+        _offset_x = 35;
         _offset_y = 0;
       } else {
         _offset_x = 0;
@@ -231,17 +284,17 @@ void St7789T4Custom::set_rotation(int value) {
       break;
 
     case 3:  // Inverted landscape
-          if (_native_width == 135) {
-            _offset_x = 40;
-            _offset_y = 52;
-          } else if (_native_height == 280) {
-            _offset_x = 20;
-            _offset_y = 0; // Waveshare 240x280: panel expects 20px left offset
-          } else if (_native_width == 172) {
-            _offset_x = 0;
-            _offset_y = 34;
-          } else if (_native_width == 170) {
-            _offset_x = 0;
+      if (_native_width == 135) {
+        _offset_x = 40;
+        _offset_y = 52;
+      } else if (_native_height == 280) {
+        _offset_x = 20;
+        _offset_y = 0; // Waveshare 240x280: panel expects 20px left offset
+      } else if (_native_width == 172) {
+        _offset_x = 0;
+        _offset_y = 34;
+      } else if (_native_width == 170) {
+        _offset_x = 0;
         _offset_y = 35;
       } else {
         _offset_x = 80;

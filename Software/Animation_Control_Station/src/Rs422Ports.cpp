@@ -1,7 +1,13 @@
 #include "Rs422Ports.h"
 
-static HardwareSerial* pickSerialForIndex(uint8_t idx) {
-  switch (idx) {
+/**
+ * Description: Select the HardwareSerial instance for a given port index.
+ * Inputs:
+ * - portIndex: index [0..7] for the RS422 port.
+ * Outputs: Returns a pointer to the matching HardwareSerial instance.
+ */
+static HardwareSerial* pickSerialForIndex(uint8_t portIndex) {
+  switch (portIndex) {
     case 0: return &Serial1;
     case 1: return &Serial2;
     case 2: return &Serial3;
@@ -14,6 +20,12 @@ static HardwareSerial* pickSerialForIndex(uint8_t idx) {
   }
 }
 
+/**
+ * Description: Initialize all RS422 ports to a given baud rate.
+ * Inputs:
+ * - baud: baud rate to use for every port.
+ * Outputs: Initializes serial ports and stores handles.
+ */
 void Rs422Ports::begin(unsigned long baud) {
   for (uint8_t i = 0; i < 8; i++) {
     _ports[i].serial = pickSerialForIndex(i);

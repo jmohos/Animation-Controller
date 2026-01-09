@@ -13,10 +13,23 @@ struct UiModel {
 };
 
 class Ui {
-  elapsedMillis _time_since_last_render;
+  elapsedMillis _timeSinceLastRender;
+  bool _ready = false;
   static constexpr unsigned long RENDER_PERIOD_MSEC = 100;
 
 public:
+  /**
+   * Description: Initialize the display and draw the startup screen.
+   * Inputs: None.
+   * Outputs: Sets up display state and draws initial UI.
+   */
   void begin();
-  void render(const UiModel& m);
+
+  /**
+   * Description: Render the UI based on the current model snapshot.
+   * Inputs:
+   * - model: UI model data to display.
+   * Outputs: Updates the display if the render period has elapsed.
+   */
+  void render(const UiModel& model);
 };
