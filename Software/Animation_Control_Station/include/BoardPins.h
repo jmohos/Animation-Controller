@@ -39,8 +39,8 @@ enum class SXPin : uint8_t {
 static constexpr uint8_t SX1509_PIN_COUNT = static_cast<uint8_t>(SXPin::COUNT);
 
 // ---------------- Analog pots ----------------
-static constexpr uint8_t PIN_POT_SPEED = A17;
-static constexpr uint8_t PIN_POT_ACCEL = A16;
+static constexpr uint8_t PIN_POT_SPEED = A16;
+static constexpr uint8_t PIN_POT_ACCEL = A17;
 
 // ---------------- Quadrature jog encoder ----------------
 static constexpr uint8_t PIN_ENC_A = 5;

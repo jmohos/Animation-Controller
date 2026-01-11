@@ -3,12 +3,13 @@
 #include <array>
 
 // Enumerated SX1509-sourced button inputs
-enum class Button : uint8_t {
-  BUTTON_LEFT = 0,
-  BUTTON_RIGHT,
+enum class Button : uint8_t
+{
+  BUTTON_OK = 0,
   BUTTON_DOWN,
   BUTTON_UP,
-  BUTTON_OK,
+  BUTTON_LEFT,
+  BUTTON_RIGHT,
   BUTTON_RED,
   BUTTON_YELLOW,
   BUTTON_GREEN,

@@ -46,7 +46,7 @@ void Ui::begin() {
     return;
   }
   tft.invertDisplay(true);
-  tft.setRotation(3); // 1 = landscape 320x240
+  tft.setRotation(1); // 1 = landscape 320x240
   tft.setFramebuffer(ili_internal_fb);
   tft.setDiffBuffers(&diff1, &diff2);
   tft.setDiffGap(6);

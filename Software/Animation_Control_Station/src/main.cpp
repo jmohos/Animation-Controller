@@ -129,11 +129,32 @@ void App::loop() {
     }    
   }
 
+  if (buttonState.justPressed(Button::BUTTON_OK)) {
+    Serial.println("BUTTON: OK");
+  }
+  if (buttonState.justPressed(Button::BUTTON_DOWN))
+  {
+    Serial.println("BUTTON: DOWN");
+  }
+  if (buttonState.justPressed(Button::BUTTON_UP))
+  {
+    Serial.println("BUTTON: UP");
+  }
+  if (buttonState.justPressed(Button::BUTTON_LEFT))
+  {
+    Serial.println("BUTTON: LEFT");
+  }
+  if (buttonState.justPressed(Button::BUTTON_RIGHT))
+  {
+    Serial.println("BUTTON: RIGHT");
+  }
+
   for (uint8_t i = 0; i < 8; i++) {
     if (buttonState.justPressed(static_cast<Button>(i))) {
       Serial.printf("BUTTON %d pressed!\n", i);
     }
   }
+  
   // // Button test: log events and mirror button->LED
   //   const char* names[8] = {"BUTTON_LEFT","BUTTON_RIGHT","BUTTON_DOWN","BUTTON_UP","BUTTON_OK","BUTTON_RED","BUTTON_YELLOW","BUTTON_GREEN"};
   //   for (uint8_t i = 0; i < 8; i++) {

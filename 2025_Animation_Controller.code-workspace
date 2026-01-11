@@ -1,0 +1,73 @@
+{
+  "folders": [
+    {
+      "path": "."
+    },
+    {
+      "name": "Animation_Control_Station",
+      "path": "Software/Animation_Control_Station"
+    }
+  ],
+  "settings": {
+    "platformio-ide.activateProjectOnTextEditorChange": true,
+    "platformio-ide.disablePIOHomeStartup": true
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "PlatformIO: Build (Animation_Control_Station)",
+        "type": "process",
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe",
+        "args": [
+          "run"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder:Animation_Control_Station}"
+        },
+        "group": "build",
+        "problemMatcher": "$platformio"
+      },
+      {
+        "label": "PlatformIO: Upload (Animation_Control_Station)",
+        "type": "process",
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe",
+        "args": [
+          "run",
+          "-t",
+          "upload"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder:Animation_Control_Station}"
+        },
+        "problemMatcher": "$platformio"
+      },
+      {
+        "label": "PlatformIO: Clean (Animation_Control_Station)",
+        "type": "process",
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe",
+        "args": [
+          "run",
+          "-t",
+          "clean"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder:Animation_Control_Station}"
+        },
+        "problemMatcher": "$platformio"
+      },
+      {
+        "label": "PlatformIO: Serial Monitor (Animation_Control_Station)",
+        "type": "process",
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe",
+        "args": [
+          "device",
+          "monitor"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder:Animation_Control_Station}"
+        }
+      }
+    ]
+  }
+}
