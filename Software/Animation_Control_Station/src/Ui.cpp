@@ -181,7 +181,7 @@ canvas->printf("FPS: %f\n", stats.avg());
 // canvas->setTextSize(2);
 
 // canvas->setTextColor(ILI9341_T4_COLOR_RED);
-// canvas->printf("Mode: %s\n", model.playing ? "PLAY" : "PAUSE");
+// canvas->printf("BUTTON_LEFT: %s\n", model.playing ? "PLAY" : "PAUSE");
 // canvas->setTextColor(ILI9341_T4_COLOR_GREEN);
 // canvas->printf("t: %lu ms\n", (unsigned long)model.showTimeMs);
 // canvas->printf("Motor: %u\n", model.selectedMotor);

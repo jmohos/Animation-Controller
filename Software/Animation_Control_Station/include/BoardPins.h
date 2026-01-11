@@ -16,31 +16,31 @@ static constexpr uint8_t PIN_SX1509_INT   = 22;
 
 // SX1509 pin assignments (P0..P15)
 enum class SXPin : uint8_t {
-  BUTTON_OK     = 0,
-  BUTTON_DOWN   = 1,
-  BUTTON_UP     = 2,
-  BUTTON_LEFT   = 3,
-  BUTTON_RIGHT  = 4,
-  BUTTON_RED    = 5,
-  BUTTON_YELLOW = 6,
-  BUTTON_GREEN  = 7,
+  SX_BUTTON_1  = 0,
+  SX_BUTTON_2  = 1,
+  SX_BUTTON_3  = 2,
+  SX_BUTTON_4  = 3,
+  SX_BUTTON_5  = 4,
+  SX_BUTTON_6  = 5,
+  SX_BUTTON_7  = 6,
+  SX_BUTTON_8  = 7,
 
-  LED_Red       = 8,
-  LED_Yellow    = 9,
-  LED_Green     = 10,
-  LED_SPARE_1   = 11,
-  LED_SPARE_2   = 12,
-  LED_SPARE_3   = 13,
-  LED_SPARE_4   = 14,
-  LED_SPARE_5   = 15,
+  SX_LED_1     = 8,
+  SX_LED_2     = 9,
+  SX_LED_3     = 10,
+  SX_LED_4     = 11,
+  SX_LED_5     = 12,
+  SX_LED_6     = 13,
+  SX_LED_7     = 14,
+  SX_LED_8     = 15,
 
   COUNT
 };
 static constexpr uint8_t SX1509_PIN_COUNT = static_cast<uint8_t>(SXPin::COUNT);
 
 // ---------------- Analog pots ----------------
-static constexpr uint8_t PIN_POT_SPEED = A16;
-static constexpr uint8_t PIN_POT_ACCEL = A17;
+static constexpr uint8_t PIN_POT_SPEED = A17;
+static constexpr uint8_t PIN_POT_ACCEL = A16;
 
 // ---------------- Quadrature jog encoder ----------------
 static constexpr uint8_t PIN_ENC_A = 5;

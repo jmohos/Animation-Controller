@@ -8,6 +8,7 @@
 
 static SX1509 g_sx;
 static bool g_sxReady = false;
+static constexpr uint8_t kLedPinBase = 8;
 
 /**
  * Description: Read and normalize a potentiometer to 0.0-1.0 with end deadbands.
@@ -52,7 +53,7 @@ static bool readBtn(uint8_t sxPin) {
  */
 static void initButtons() {
   g_sx.debounceTime(32); // ~32ms debounce
-  for (uint8_t i = 0; i < 8; i++) {
+  for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
     g_sx.pinMode(i, INPUT_PULLUP);
     g_sx.debouncePin(i);
   }
@@ -64,7 +65,8 @@ static void initButtons() {
  * Outputs: Initializes LED drivers and sets them off.
  */
 static void initLeds() {
-  for (uint8_t pin = 8; pin < 16; pin++) {
+  for (uint8_t idx = 0; idx < LED_COUNT; idx++) {
+    const uint8_t pin = kLedPinBase + idx;
     g_sx.ledDriverInit(pin); // linear, default freq
     // Drive inverted: ULN2803A sinks when input is high, so keep off at max.
     g_sx.analogWrite(pin, 255);
@@ -78,7 +80,17 @@ static void initLeds() {
  * Outputs: Returns the SX1509 pin number.
  */
 static inline uint8_t ledPinForIdx(uint8_t idx) {
-  return 8 + idx; // LEDs map to SX1509 pins 8..15
+  return kLedPinBase + idx; // LEDs map to SX1509 pins 8..15
+}
+
+/**
+ * Description: Convert an LED enum value into a logical LED index.
+ * Inputs:
+ * - led: LED enumeration value.
+ * Outputs: Returns LED index [0..7].
+ */
+static inline uint8_t ledIndex(LED led) {
+  return static_cast<uint8_t>(led);
 }
 
 /**
@@ -139,14 +151,14 @@ InputState Input::poll() {
 
   // Button order must match _last[] order (8 buttons)
   std::array<bool, BUTTON_COUNT> buttonStates = {
-    readBtn((uint8_t)SXPin::BUTTON_OK),
-    readBtn((uint8_t)SXPin::BUTTON_DOWN),
-    readBtn((uint8_t)SXPin::BUTTON_UP),
-    readBtn((uint8_t)SXPin::BUTTON_LEFT),
-    readBtn((uint8_t)SXPin::BUTTON_RIGHT),
-    readBtn((uint8_t)SXPin::BUTTON_RED),
-    readBtn((uint8_t)SXPin::BUTTON_YELLOW),
-    readBtn((uint8_t)SXPin::BUTTON_GREEN),
+    readBtn((uint8_t)SXPin::SX_BUTTON_5),
+    readBtn((uint8_t)SXPin::SX_BUTTON_3),
+    readBtn((uint8_t)SXPin::SX_BUTTON_4),
+    readBtn((uint8_t)SXPin::SX_BUTTON_1),
+    readBtn((uint8_t)SXPin::SX_BUTTON_2),
+    readBtn((uint8_t)SXPin::SX_BUTTON_6),
+    readBtn((uint8_t)SXPin::SX_BUTTON_7),
+    readBtn((uint8_t)SXPin::SX_BUTTON_8),
   };
 
 
@@ -181,7 +193,7 @@ void Input::updateLeds() {
     return;
   }
   const unsigned long nowMs = millis();
-  for (uint8_t i = 0; i < 8; i++) {
+  for (uint8_t i = 0; i < LED_COUNT; i++) {
     const uint8_t pin = ledPinForIdx(i);
     switch (_ledModes[i]) {
       case LedMode::Off:
@@ -217,26 +229,17 @@ void Input::updateLeds() {
 }
 
 /**
- * Description: Turn the play LED on or off.
+ * Description: Configure an LED mode and timing.
  * Inputs:
- * - on: true to illuminate, false to turn off.
- * Outputs: Updates LED output state.
- */
-void Input::setPlayLed(bool on) {
-  setLedSteady(0, on ? 255 : 0); // use LED0 for play indicator
-}
-
-/**
- * Description: Configure an LED mode and timing by index.
- * Inputs:
- * - idx: LED index [0..7].
+ * - led: LED to configure.
  * - mode: desired LED mode.
  * - tOnMs: blink on-time (ms).
  * - tOffMs: blink off-time (ms).
  * Outputs: Updates LED mode, duty, and timing.
  */
-void Input::setLedMode(uint8_t idx, LedMode mode, unsigned long tOnMs, unsigned long tOffMs) {
-  if (idx >= 8) return;
+void Input::setLedMode(LED led, LedMode mode, unsigned long tOnMs, unsigned long tOffMs) {
+  const uint8_t idx = ledIndex(led);
+  if (idx >= LED_COUNT) return;
   _ledModes[idx] = mode;
   if (mode == LedMode::Blink) {
     _ledOnMs[idx] = tOnMs;
@@ -251,25 +254,27 @@ void Input::setLedMode(uint8_t idx, LedMode mode, unsigned long tOnMs, unsigned 
 }
 
 /**
- * Description: Get the current LED mode by index.
+ * Description: Get the current LED mode.
  * Inputs:
- * - idx: LED index [0..7].
+ * - led: LED to query.
  * Outputs: Returns the LED mode.
  */
-LedMode Input::getLedMode(uint8_t idx) const {
-  if (idx >= 8) return LedMode::Off;
+LedMode Input::getLedMode(LED led) const {
+  const uint8_t idx = ledIndex(led);
+  if (idx >= LED_COUNT) return LedMode::Off;
   return _ledModes[idx];
 }
 
 /**
  * Description: Set a steady LED duty cycle.
  * Inputs:
- * - idx: LED index [0..7].
+ * - led: LED to configure.
  * - duty: duty cycle (0-255).
  * Outputs: Updates LED duty and output.
  */
-void Input::setLedSteady(uint8_t idx, uint8_t duty) {
-  if (idx >= 8) return;
+void Input::setLedSteady(LED led, uint8_t duty) {
+  const uint8_t idx = ledIndex(led);
+  if (idx >= LED_COUNT) return;
   _ledModes[idx] = (duty == 0) ? LedMode::Off : LedMode::On;
   _ledDuty[idx] = duty;
   _ledOnMs[idx] = _ledOffMs[idx] = 0;
@@ -283,11 +288,11 @@ void Input::setLedSteady(uint8_t idx, uint8_t duty) {
 /**
  * Description: Configure a blinking LED mode.
  * Inputs:
- * - idx: LED index [0..7].
+ * - led: LED to configure.
  * - tOnMs: on-time in milliseconds.
  * - tOffMs: off-time in milliseconds.
  * Outputs: Updates LED mode and timing.
  */
-void Input::setLedBlink(uint8_t idx, unsigned long tOnMs, unsigned long tOffMs) {
-  setLedMode(idx, LedMode::Blink, tOnMs, tOffMs);
+void Input::setLedBlink(LED led, unsigned long tOnMs, unsigned long tOffMs) {
+  setLedMode(led, LedMode::Blink, tOnMs, tOffMs);
 }
