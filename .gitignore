@@ -39,3 +39,7 @@
 
 # debug information files
 *.dwo
+
+# Large media files (store outside Git history)
+Hardware/Media/
+*.avi
