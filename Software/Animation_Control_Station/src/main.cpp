@@ -26,8 +26,11 @@ void App::begin() {
   _console.setDispatchCommand(handleConsoleCommand);
   _console.begin();
 
-  const bool ok = _input.begin();
-  LOGI("Input begin: %s", ok ? "BUTTON_RED" : "FAIL");
+  const bool buttonsOk = _buttons.begin();
+  const bool ledsOk = _leds.begin();
+  _analogs.begin();
+  LOGI("Buttons begin: %s", buttonsOk ? "OK" : "FAIL");
+  LOGI("Leds begin: %s", ledsOk ? "OK" : "FAIL");
 
   _enc.begin(PIN_ENC_A, PIN_ENC_B);
 
@@ -51,11 +54,12 @@ void App::loop() {
   _console.poll();
 
   // Process button inputs from user interface.
-  InputState inputState = _input.poll();
+  ButtonState buttonState = _buttons.poll();
+  AnalogState analogState = _analogs.read();
 
   // Update the jog wheel encoder counts.
-  inputState.encoderDelta = _enc.consumeDelta();
-  _model.jogPos += inputState.encoderDelta;
+  const int32_t encoderDelta = _enc.consumeDelta();
+  _model.jogPos += encoderDelta;
 
   // TEST CODE
   // Periodic serial test messages (10 Hz per port)
@@ -95,38 +99,38 @@ void App::loop() {
   }
   
   // Toggle red led with red button
-  if (inputState.justPressed(Button::BUTTON_RED)) {
-    if (_input.getLedMode(LED::LED_RED_BUTTON) == LedMode::Off) {
-      _input.setLedMode(LED::LED_RED_BUTTON, LedMode::On);
+  if (buttonState.justPressed(Button::BUTTON_RED)) {
+    if (_leds.getMode(LED::LED_RED_BUTTON) == LedMode::Off) {
+      _leds.setMode(LED::LED_RED_BUTTON, LedMode::On);
       Serial.println("Red LED to ON");
     } else {
-      _input.setLedMode(LED::LED_RED_BUTTON, LedMode::Off);
+      _leds.setMode(LED::LED_RED_BUTTON, LedMode::Off);
       Serial.println("Red LED to OFF");
     }    
   }
 
-  if (inputState.justPressed(Button::BUTTON_YELLOW)) {
-    if (_input.getLedMode(LED::LED_YELLOW_BUTTON) == LedMode::Off) {
-      _input.setLedMode(LED::LED_YELLOW_BUTTON, LedMode::Blink);
+  if (buttonState.justPressed(Button::BUTTON_YELLOW)) {
+    if (_leds.getMode(LED::LED_YELLOW_BUTTON) == LedMode::Off) {
+      _leds.setMode(LED::LED_YELLOW_BUTTON, LedMode::Blink);
       Serial.println("Yellow LED to Blink");
     } else {
-      _input.setLedMode(LED::LED_YELLOW_BUTTON, LedMode::Off);
+      _leds.setMode(LED::LED_YELLOW_BUTTON, LedMode::Off);
       Serial.println("Yellow LED to Off");
     }    
   }
 
-    if (inputState.justPressed(Button::BUTTON_GREEN)) {
-    if (_input.getLedMode(LED::LED_GREEN_BUTTON) == LedMode::Off) {
-      _input.setLedMode(LED::LED_GREEN_BUTTON, LedMode::Blink, 50, 450);
+    if (buttonState.justPressed(Button::BUTTON_GREEN)) {
+    if (_leds.getMode(LED::LED_GREEN_BUTTON) == LedMode::Off) {
+      _leds.setMode(LED::LED_GREEN_BUTTON, LedMode::Blink, 50, 450);
       Serial.println("Green LED to Blink");
     } else {
-      _input.setLedMode(LED::LED_GREEN_BUTTON, LedMode::Off);
+      _leds.setMode(LED::LED_GREEN_BUTTON, LedMode::Off);
       Serial.println("Green LED to Off");
     }    
   }
 
   for (uint8_t i = 0; i < 8; i++) {
-    if (inputState.justPressed((Button)i)) {
+    if (buttonState.justPressed(static_cast<Button>(i))) {
       Serial.printf("BUTTON %d pressed!\n", i);
     }
   }
@@ -135,29 +139,31 @@ void App::loop() {
   //   for (uint8_t i = 0; i < 8; i++) {
   //     if (in.isJustPressed[i]) {
   //       LOGI("BTN %s: pressed", names[i]);
-  //       //_input.setLedBlink(i, 100, 100, 0, 255);
-  //       _input.setLedSteady(static_cast<LED>(i), 255); // full on (inverted in driver)
+  //       //_leds.setBlink(static_cast<LED>(i), 100, 100);
+  //       _leds.setSteady(static_cast<LED>(i), 255); // full on (inverted in driver)
   //     } else if (in.isJustReleased[i]) {
   //       LOGI("BTN %s: released", names[i]);
-  //       _input.setLedSteady(static_cast<LED>(i), 0);   // off (inverted in driver)
+  //       _leds.setSteady(static_cast<LED>(i), 0);   // off (inverted in driver)
   //     }
   //   }
 
   // // play toggle
-  // if (inputState.justPressed(Button::BUTTON_YELLOW)) {
+  // if (buttonState.justPressed(Button::BUTTON_YELLOW)) {
   //   _model.playing = !_model.playing;
   //   _show.setPlaying(_model.playing);
-  //   _input.setPlayLed(_model.playing);
+  //   _leds.setMode(LED::LED_YELLOW_BUTTON, _model.playing ? LedMode::On : LedMode::Off);
   //   LOGI("BUTTON_YELLOW -> %s", _model.playing ? "ON" : "OFF");
   // }
 
   // // simple motor select with left/right for now
-  // if (inputState.justPressed(Button::BUTTON_UP)  && _model.selectedMotor > 0) _model.selectedMotor--;
-  // if (inputState.justPressed(Button::BUTTON_OK) && _model.selectedMotor < 15) _model.selectedMotor++; // up to 16 motors later
+  // if (buttonState.justPressed(Button::BUTTON_UP)  && _model.selectedMotor > 0) _model.selectedMotor--;
+  // if (buttonState.justPressed(Button::BUTTON_OK) && _model.selectedMotor < 15) _model.selectedMotor++; // up to 16 motors later
 
   // _model.showTimeMs = _show.currentTimeMs();
-   _model.speedNorm  = inputState.potSpeedNorm;
-   _model.accelNorm  = inputState.potAccelNorm;
+   _model.speedNorm  = analogState.potSpeedNorm;
+   _model.accelNorm  = analogState.potAccelNorm;
+
+  _leds.update();
 
   // Update the user interface outputs with latest status.
   _ui.render(_model);

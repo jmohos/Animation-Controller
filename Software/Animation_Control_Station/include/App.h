@@ -1,6 +1,8 @@
 #pragma once
 #include "Console.h"
-#include "Input.h"
+#include "Buttons.h"
+#include "Leds.h"
+#include "AnalogInputs.h"
 #include "Ui.h"
 #include "ShowEngine.h"
 #include "EncoderJog.h"
@@ -24,7 +26,9 @@ public:
 
 private:
   Console _console;
-  Input _input;
+  Buttons _buttons;
+  Leds _leds;
+  AnalogInputs _analogs;
   Ui _ui;
   ShowEngine _show;
   EncoderJog _enc;

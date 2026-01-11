@@ -3,16 +3,10 @@
 #include "Faults.h"
 #include <SPI.h>
 #include <Adafruit_GFX.h>
-#include "DisplayConfig.h"
 
-#if defined(DISPLAY_ILI9341_T4)
 #include <ILI9341_T4.h>
 #include "ILI9341Wrapper.h"
-#else
-#include "St7789T4Custom.h"
-#endif
 
-#if defined(DISPLAY_ILI9341_T4)
 // Optimized ILI9341 driver (DMA, double-buffered)
 static constexpr uint32_t ILI9341_SPI_HZ = 30000000;
 // MISO disabled to allow MOSI-only display wiring.
@@ -20,12 +14,6 @@ static ILI9341Wrapper tft(PIN_LCD_CS, PIN_LCD_DC, 13, 11, 255, PIN_LCD_RST);
 DMAMEM static uint16_t ili_internal_fb[320 * 240];
 static ILI9341_T4::DiffBuffStatic<40000> diff1;
 static ILI9341_T4::DiffBuffStatic<40000> diff2;
-#else
-// Optimized ST7789 driver for Teensy 4.x with configurable SPI speed
-static St7789T4Custom tft(DISPLAY_RESOLUTION,
-                          PIN_LCD_CS, PIN_LCD_DC, PIN_LCD_RST, PIN_LCD_BL,
-                          ST7789_SPI_HZ_DEFAULT);
-#endif
 
 // Allocate canvas to match the rotated display dimensions at runtime.
 static GFXcanvas16* canvas = nullptr;
@@ -40,11 +28,7 @@ static constexpr uint16_t COLOR_WHITE = 0xFFFF;
  */
 static void flushCanvas() {
   if (!canvas) return;
-#if defined(DISPLAY_ILI9341_T4)
   tft.update(canvas->getBuffer()); // DMA + diff buffers
-#else
-  tft.flush(0, 0, tft.width() - 1, tft.height() - 1, canvas->getBuffer());
-#endif
 }
 
 /**
@@ -56,7 +40,6 @@ void Ui::begin() {
   _ready = false;
   SPI.begin(); // init SPI0 before the driver starts transactions
 
-#if defined(DISPLAY_ILI9341_T4)
   tft.output(nullptr);
   if (!tft.begin(ILI9341_SPI_HZ)) {
     FAULT_SET(FAULT_LCD_DISPLAY_FAULT);
@@ -69,19 +52,13 @@ void Ui::begin() {
   tft.setDiffGap(6);
   tft.setRefreshRate(60);
   tft.setVSyncSpacing(1);
-#else
-  tft.begin();
-  tft.rotation(1); // landscape
-#endif
 
   canvas = new GFXcanvas16(tft.width(), tft.height());
   if (!canvas) {
     FAULT_SET(FAULT_LCD_DISPLAY_FAULT);
     return;
   }
-#if defined(DISPLAY_ILI9341_T4)
   tft.setCanvas(canvas->getBuffer(), tft.width(), tft.height());
-#endif
 
   canvas->fillScreen(COLOR_BLACK);
   canvas->setTextWrap(false);

@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-// ---------------- LCD: Waveshare 2" ST7789V 240x320 ----------------
+// ---------------- LCD: ILI9341 240x320 ----------------
 // Teensy 4.1 SPI0: MOSI=11, MISO=12, SCK=13 (hardware)
 static constexpr uint8_t PIN_LCD_CS   = 10;
 static constexpr uint8_t PIN_LCD_DC   = 39;
