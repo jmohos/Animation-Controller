@@ -29,49 +29,60 @@ The key high level requirements include:
 * Can control a series of robotic endpoints using up to 8 full-duplex serial ports.
 * Robotic endpoints can be either motion, light or sound controllers.
 * The motion control endpoints will include the BasicMicro Roboclaw controllers which can control either 1 or 2 motors via a single serial interface.
+* RoboClaw controllers must be configured for Packet Serial mode at 115200 baud.
 * Future options for motion control endpoints will include options to manage stepper motors, servos, solenoids and hydraulic valves.
 * Future options for light control will include endpoints to manage DMX-based light controllers.
 * Future options for sound control will include endpoints that can receive commands to play audio tracks.
 * Animation sequences shall be stored in a portable animation sequence file that contains the time-based steps for each animation endpoint.
 * Animation sequences are stored on the animation controller SD card.
 
-## Animation Sequence File (CSV)
-The controller reads a human-editable CSV file from the SD card. The file defines a single looping animation with a maximum duration of 5 minutes (300000 ms).
+## Animation File (CSV with Sections)
+The controller reads a human-editable CSV file from the SD card. The file defines a single looping animation with a maximum duration of 5 minutes (300000 ms). Configuration lives inside the animation file so it is the single source of truth for endpoints and limits.
 
-Schema (CSV columns, in order):
+Section markers:
+- `[endpoints]` for endpoint configuration
+- `[sequence]` for time-based animation steps
+
+Endpoint config schema (CSV columns, in order):
+1. `endpoint_id` - 1-based endpoint index.
+2. `serial_port` - Serial port number (1-8).
+3. `address` - RoboClaw address (hex allowed, e.g. `0x80`).
+4. `motor` - Motor channel on the RoboClaw: `1` or `2`.
+5. `enabled` - `1` or `0`.
+6. `max_velocity` - Absolute max velocity (counts/sec).
+7. `max_accel` - Absolute max accel (counts/sec^2).
+
+Sequence schema (CSV columns, in order):
 1. `time_ms` - Integer milliseconds from 0 to 300000.
-2. `endpoint_id` - 1-based endpoint index (maps to a separate endpoint configuration table).
+2. `endpoint_id` - 1-based endpoint index.
 3. `position` - Target position in encoder counts.
 4. `velocity` - Max velocity in encoder counts per second.
 5. `accel` - Max acceleration in encoder counts per second squared.
+6. `mode` (optional) - `pos` (default) or `vel` to issue a velocity-only command.
 
 Example:
 ```
-# time_ms,endpoint_id,position,velocity,accel
+[endpoints]
+# endpoint_id,serial_port,address,motor,enabled,max_velocity,max_accel
+1,1,0x80,1,1,50000,50000
+2,1,0x80,2,1,50000,50000
+
+[sequence]
+# time_ms,endpoint_id,position,velocity,accel,mode
 0,1,0,0,0
 0,2,0,0,0
 500,1,1200,2000,1000
 500,2,800,2000,1000
+1000,1,0,1500,500,vel
 ```
-
-### Endpoint Configuration Table
-Endpoints map to a serial port and RoboClaw address in a separate config table (stored on SD or in EEPROM). The animation file references `endpoint_id` only.
-
-Default mapping (RoboClaw 2x30A, dual-motor):
-- Endpoints 1-2 -> Serial 1 (endpoint 1 = M1, endpoint 2 = M2)
-- Endpoints 3-4 -> Serial 2 (endpoint 3 = M1, endpoint 4 = M2)
-- Endpoints 5-6 -> Serial 3 (endpoint 5 = M1, endpoint 6 = M2)
-- Endpoints 7-8 -> Serial 4 (endpoint 7 = M1, endpoint 8 = M2)
-- Endpoints 9-10 -> Serial 5 (endpoint 9 = M1, endpoint 10 = M2)
-- Endpoints 11-12 -> Serial 6 (endpoint 11 = M1, endpoint 12 = M2)
-- Endpoints 13-14 -> Serial 7 (endpoint 13 = M1, endpoint 14 = M2)
-- Endpoints 15-16 -> Serial 8 (endpoint 15 = M1, endpoint 16 = M2)
 
 Notes:
 - Lines starting with `#` are comments and ignored.
-- Rows may be in any order; playback is sorted by `time_ms`.
-- `velocity` and `accel` are required on every row for consistency.
 - The animation loops at the largest `time_ms` found, capped at 300000 ms.
+- `velocity` and `accel` are required on every row for consistency.
+- If the `[endpoints]` section is missing, the controller falls back to `/endpoints.csv` or EEPROM defaults.
+- `max_velocity` and `max_accel` define absolute limits used to scale normalized UI inputs (0-100%).
+- When `mode=vel`, the `position` field is ignored.
 
 
 ### Hardware - Overall System

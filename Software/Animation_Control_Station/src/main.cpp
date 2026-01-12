@@ -3,18 +3,184 @@
 #include "App.h"
 #include "BoardPins.h"
 #include "Faults.h"
+#include "MenuDefs.h"
+#include <cstring>
+#include <cstdlib>
+#include <cstdarg>
+#include <cstdio>
 
-/**
- * Description: Dispatch console commands for the application.
- * Inputs:
- * - msg: parsed command message.
- * Outputs: Executes command handling logic.
- */
-static void handleConsoleCommand(const CommandMsg &msg) {
-  LOGI("CONSOLE CMD: %s (args=%u)", msg.cmd, msg.argc);
-  for (uint8_t i = 0; i < msg.argc; i++) {
-    LOGI("  arg[%u]=%s", i, msg.argv[i]);
+App g_app;
+
+static constexpr uint32_t kMaxVelocityCountsPerSec = 50000;
+static constexpr uint32_t kMaxAccelCountsPerSec2 = 50000;
+static constexpr uint8_t kEndpointPortMin = 1;
+static constexpr uint8_t kEndpointPortMax = 8;
+static constexpr uint8_t kEndpointMotorMin = 1;
+static constexpr uint8_t kEndpointMotorMax = 2;
+static constexpr uint8_t kEndpointAddressMin = 0x80;
+static constexpr uint8_t kEndpointAddressMax = 0x87;
+static constexpr uint32_t kEndpointVelocityStep = 1;
+static constexpr uint32_t kEndpointAccelStep = 1;
+static constexpr uint32_t kEndpointRateMax = 0xFFFFFFFFu;
+
+static uint8_t clampU8(int32_t value, uint8_t minValue, uint8_t maxValue) {
+  if (value < minValue) {
+    return minValue;
   }
+  if (value > maxValue) {
+    return maxValue;
+  }
+  return static_cast<uint8_t>(value);
+}
+
+static uint32_t clampU32(int64_t value, uint32_t minValue, uint32_t maxValue) {
+  if (value < static_cast<int64_t>(minValue)) {
+    return minValue;
+  }
+  if (value > static_cast<int64_t>(maxValue)) {
+    return maxValue;
+  }
+  return static_cast<uint32_t>(value);
+}
+
+static bool parseUint32(const char *text, uint32_t &value) {
+  if (!text) {
+    return false;
+  }
+  int base = 10;
+  if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+    base = 16;
+  }
+  char *end = nullptr;
+  value = strtoul(text, &end, base);
+  return (end != text);
+}
+
+static bool parseInt32(const char *text, int32_t &value) {
+  if (!text) {
+    return false;
+  }
+  int base = 10;
+  if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+    base = 16;
+  }
+  char *end = nullptr;
+  long parsed = strtol(text, &end, base);
+  if (end == text) {
+    return false;
+  }
+  value = static_cast<int32_t>(parsed);
+  return true;
+}
+
+static bool parseBoolToken(const char *text, uint8_t &value) {
+  if (!text) {
+    return false;
+  }
+  if (strcmp(text, "on") == 0 || strcmp(text, "true") == 0 || strcmp(text, "enable") == 0) {
+    value = 1;
+    return true;
+  }
+  if (strcmp(text, "off") == 0 || strcmp(text, "false") == 0 || strcmp(text, "disable") == 0) {
+    value = 0;
+    return true;
+  }
+  uint32_t parsed = 0;
+  if (!parseUint32(text, parsed)) {
+    return false;
+  }
+  value = (parsed != 0) ? 1 : 0;
+  return true;
+}
+
+static bool parseEndpointFieldName(const char *text, EndpointField &field) {
+  if (!text) {
+    return false;
+  }
+  if (strcmp(text, "enabled") == 0 || strcmp(text, "enable") == 0) {
+    field = EndpointField::Enabled;
+    return true;
+  }
+  if (strcmp(text, "serial") == 0 || strcmp(text, "port") == 0) {
+    field = EndpointField::SerialPort;
+    return true;
+  }
+  if (strcmp(text, "motor") == 0) {
+    field = EndpointField::Motor;
+    return true;
+  }
+  if (strcmp(text, "address") == 0 || strcmp(text, "addr") == 0) {
+    field = EndpointField::Address;
+    return true;
+  }
+  if (strcmp(text, "vmax") == 0 || strcmp(text, "max_velocity") == 0) {
+    field = EndpointField::MaxVelocity;
+    return true;
+  }
+  if (strcmp(text, "amax") == 0 || strcmp(text, "max_accel") == 0) {
+    field = EndpointField::MaxAccel;
+    return true;
+  }
+  return false;
+}
+
+static bool resolveEndpoint(const AppConfig &config, uint8_t endpointIndex, const EndpointConfig *&ep, uint8_t &portIndex) {
+  if (endpointIndex >= MAX_ENDPOINTS) {
+    return false;
+  }
+  const EndpointConfig &candidate = config.endpoints[endpointIndex];
+  if (!candidate.enabled) {
+    return false;
+  }
+  if (candidate.serialPort < 1 || candidate.serialPort > 8) {
+    return false;
+  }
+  if (candidate.motor < 1 || candidate.motor > 2) {
+    return false;
+  }
+  ep = &candidate;
+  portIndex = static_cast<uint8_t>(candidate.serialPort - 1);
+  return true;
+}
+
+static void printEndpointConfig(Stream &out, uint8_t endpointIndex, const EndpointConfig &ep) {
+  out.printf("EP%u: port=%u motor=%u addr=0x%02X %s vmax=%lu amax=%lu\n",
+             (unsigned)(endpointIndex + 1),
+             (unsigned)ep.serialPort,
+             (unsigned)ep.motor,
+             (unsigned)ep.address,
+             ep.enabled ? "EN" : "DIS",
+             (unsigned long)ep.maxVelocity,
+             (unsigned long)ep.maxAccel);
+}
+
+static uint8_t wrapIndexUp(uint8_t index, uint8_t count) {
+  if (count == 0) {
+    return 0;
+  }
+  return (index == 0) ? static_cast<uint8_t>(count - 1) : static_cast<uint8_t>(index - 1);
+}
+
+static uint8_t wrapIndexDown(uint8_t index, uint8_t count) {
+  if (count == 0) {
+    return 0;
+  }
+  return static_cast<uint8_t>((index + 1) % count);
+}
+
+static void rebootNow() {
+  Serial.flush();
+  delay(50);
+#if defined(NVIC_SystemReset)
+  NVIC_SystemReset();
+#else
+  SCB_AIRCR = 0x05FA0004;
+  while (true) { }
+#endif
+}
+
+static void handleConsoleCommand(const CommandMsg &msg) {
+  g_app.handleConsoleCommand(msg);
 }
 
 /**
@@ -23,7 +189,7 @@ static void handleConsoleCommand(const CommandMsg &msg) {
  * Outputs: Configures input, encoder, UI, show engine, and RS422 ports.
  */
 void App::begin() {
-  _console.setDispatchCommand(handleConsoleCommand);
+  _console.setDispatchCommand(::handleConsoleCommand);
   _console.begin();
 
   const bool buttonsOk = _buttons.begin();
@@ -39,9 +205,42 @@ void App::begin() {
 
   // Choose a starting baud for RoboClaw comms; we can change later.
   _rs422.begin(115200);
+  _roboclaw.begin(_rs422, 10000, 115200);
+
+  _configLoaded = _configStore.load(_config);
+  if (!_configLoaded) {
+    _configStore.setDefaults(_config);
+    _configStore.save(_config);
+    _configLoaded = true;
+  }
+
+  _sdReady = _sd.begin();
+  _configFromAnim = false;
+  _configFromEndpoints = false;
+  if (_sdReady) {
+    if (_sd.loadAnimationConfig(SdCardManager::kAnimationFilePath, _config, Serial)) {
+      _configFromAnim = true;
+      _configStore.save(_config);
+    } else if (_sd.loadEndpointConfig(_config, Serial)) {
+      _configFromEndpoints = true;
+      _configStore.save(_config);
+    }
+  }
+  _sequenceLoaded = _sdReady && _sequence.loadFromAnimation(_sd, SdCardManager::kAnimationFilePath, Serial);
 
   _model.playing = false;
   _model.selectedMotor = 0;
+  _screen = UiScreen::Boot;
+  _bootStartMs = millis();
+  _screenBeforeMenu = UiScreen::Manual;
+  _menuIndex = 0;
+  _settingsIndex = 0;
+  _diagnosticsIndex = 0;
+  _endpointConfigIndex = 0;
+  _endpointConfigField = 0;
+  _endpointConfigEditing = false;
+  const char *cfgTag = _configFromAnim ? "ANIM" : (_configFromEndpoints ? "EP" : (_configLoaded ? "EEP" : "DEF"));
+  setStatusLine("CFG:%s SD:%s", cfgTag, _sdReady ? "OK" : "ERR");
 }
 
 /**
@@ -59,130 +258,282 @@ void App::loop() {
 
   // Update the jog wheel encoder counts.
   const int32_t encoderDelta = _enc.consumeDelta();
-  _model.jogPos += encoderDelta;
-
-  // TEST CODE
-  // Periodic serial test messages (10 Hz per port)
-  static uint32_t lastSerialTick = 0;
-  static uint32_t serialSeq[8] = {0};
-  if (millis() - lastSerialTick >= 100) {
-    lastSerialTick = millis();
-    for (uint8_t i = 0; i < 8; i++) {
-      auto* serialPort = _rs422.port(i).serial;
-      if (serialPort) {
-        serialPort->printf("Hello from port %u, %lu\r\n", (unsigned)i + 1, (unsigned long)serialSeq[i]++);
-      }
-    }
-
-    // Dump status to console
-    Serial.printf("%d, %d, %d\n", (int)(_model.speedNorm * 100.0f), (int)(_model.accelNorm * 100.0f), _model.jogPos);
+  if (_screen == UiScreen::Boot && (millis() - _bootStartMs) > 500) {
+    _screen = UiScreen::Manual;
   }
 
-  // Dump serial port RX traffic.
-  for (uint8_t i = 0; i < 8; i++) {
-    auto* serialPort = _rs422.port(i).serial;
-    if (serialPort) {
-      static char line[64];
-      line[0] = '\0';
-      uint8_t count = 0;
-      while (serialPort->available() && count < 16) {
-        const int b = serialPort->read();
-        const int written = snprintf(line + count * 3, sizeof(line) - count * 3, "%02X ", b & 0xFF);
-        (void)written;
-        count++;
-      }
-      if (count) {
-        LOGI("SER %d: RX: %s", i, line);
-      }
-
+  if (buttonState.justPressed(Button::BUTTON_RIGHT)) {
+    if (_screen != UiScreen::Menu && _screen != UiScreen::Settings && _screen != UiScreen::Diagnostics) {
+      _screenBeforeMenu = _screen;
+      _screen = UiScreen::Menu;
     }
   }
-  
-  // Toggle red led with red button
-  if (buttonState.justPressed(Button::BUTTON_RED)) {
-    if (_leds.getMode(LED::LED_RED_BUTTON) == LedMode::Off) {
-      _leds.setMode(LED::LED_RED_BUTTON, LedMode::On);
-      Serial.println("Red LED to ON");
-    } else {
-      _leds.setMode(LED::LED_RED_BUTTON, LedMode::Off);
-      Serial.println("Red LED to OFF");
-    }    
-  }
 
-  if (buttonState.justPressed(Button::BUTTON_YELLOW)) {
-    if (_leds.getMode(LED::LED_YELLOW_BUTTON) == LedMode::Off) {
-      _leds.setMode(LED::LED_YELLOW_BUTTON, LedMode::Blink);
-      Serial.println("Yellow LED to Blink");
-    } else {
-      _leds.setMode(LED::LED_YELLOW_BUTTON, LedMode::Off);
-      Serial.println("Yellow LED to Off");
-    }    
-  }
-
+  if (_screen == UiScreen::Menu) {
+    if (buttonState.justPressed(Button::BUTTON_UP)) {
+      _menuIndex = wrapIndexUp(_menuIndex, MENU_ITEM_COUNT);
+    } else if (buttonState.justPressed(Button::BUTTON_DOWN)) {
+      _menuIndex = wrapIndexDown(_menuIndex, MENU_ITEM_COUNT);
+    } else if (buttonState.justPressed(Button::BUTTON_OK)) {
+      const MenuItem &item = MENU_ITEMS[_menuIndex];
+      if (item.callback) {
+        item.callback(*this);
+      }
+      if (item.opensScreen) {
+        _screen = item.targetScreen;
+      }
+    } else if (buttonState.justPressed(Button::BUTTON_LEFT)) {
+      _screen = _screenBeforeMenu;
+    }
+  } else if (_screen == UiScreen::EndpointConfig) {
+    if (buttonState.justPressed(Button::BUTTON_UP)) {
+      _endpointConfigIndex = wrapIndexUp(_endpointConfigIndex, MAX_ENDPOINTS);
+    } else if (buttonState.justPressed(Button::BUTTON_DOWN)) {
+      _endpointConfigIndex = wrapIndexDown(_endpointConfigIndex, MAX_ENDPOINTS);
+    } else if (buttonState.justPressed(Button::BUTTON_OK)) {
+      _endpointConfigField = 0;
+      _endpointConfigEditing = false;
+      _screen = UiScreen::EndpointConfigEdit;
+    } else if (buttonState.justPressed(Button::BUTTON_LEFT)) {
+      _screen = UiScreen::Menu;
+    }
+  } else if (_screen == UiScreen::EndpointConfigEdit) {
+    if (buttonState.justPressed(Button::BUTTON_LEFT)) {
+      _endpointConfigEditing = false;
+      _screen = UiScreen::EndpointConfig;
+    } else if (buttonState.justPressed(Button::BUTTON_OK)) {
+      _endpointConfigEditing = !_endpointConfigEditing;
+    } else if (buttonState.justPressed(Button::BUTTON_UP)) {
+      if (_endpointConfigEditing) {
+        adjustEndpointField(1);
+      } else {
+        _endpointConfigField = wrapIndexUp(_endpointConfigField, ENDPOINT_FIELD_COUNT);
+      }
+    } else if (buttonState.justPressed(Button::BUTTON_DOWN)) {
+      if (_endpointConfigEditing) {
+        adjustEndpointField(-1);
+      } else {
+        _endpointConfigField = wrapIndexDown(_endpointConfigField, ENDPOINT_FIELD_COUNT);
+      }
+    }
+  } else if (_screen == UiScreen::Endpoints) {
+    if (buttonState.justPressed(Button::BUTTON_UP)) {
+      _model.selectedMotor = wrapIndexUp(_model.selectedMotor, MAX_ENDPOINTS);
+    } else if (buttonState.justPressed(Button::BUTTON_DOWN)) {
+      _model.selectedMotor = wrapIndexDown(_model.selectedMotor, MAX_ENDPOINTS);
+    } else if (buttonState.justPressed(Button::BUTTON_LEFT)) {
+      _screen = UiScreen::Menu;
+    }
+  } else if (_screen == UiScreen::Settings) {
+    if (buttonState.justPressed(Button::BUTTON_UP)) {
+      _settingsIndex = wrapIndexUp(_settingsIndex, SETTINGS_ITEM_COUNT);
+    } else if (buttonState.justPressed(Button::BUTTON_DOWN)) {
+      _settingsIndex = wrapIndexDown(_settingsIndex, SETTINGS_ITEM_COUNT);
+    } else if (buttonState.justPressed(Button::BUTTON_OK)) {
+      const MenuItem &item = SETTINGS_ITEMS[_settingsIndex];
+      if (item.callback) {
+        item.callback(*this);
+      }
+    } else if (buttonState.justPressed(Button::BUTTON_LEFT)) {
+      _screen = UiScreen::Menu;
+    }
+  } else if (_screen == UiScreen::Diagnostics) {
+    if (buttonState.justPressed(Button::BUTTON_UP)) {
+      _diagnosticsIndex = wrapIndexUp(_diagnosticsIndex, DIAGNOSTICS_ITEM_COUNT);
+    } else if (buttonState.justPressed(Button::BUTTON_DOWN)) {
+      _diagnosticsIndex = wrapIndexDown(_diagnosticsIndex, DIAGNOSTICS_ITEM_COUNT);
+    } else if (buttonState.justPressed(Button::BUTTON_OK)) {
+      const MenuItem &item = DIAGNOSTICS_ITEMS[_diagnosticsIndex];
+      if (item.callback) {
+        item.callback(*this);
+      }
+      if (item.opensScreen) {
+        _screen = item.targetScreen;
+      }
+    } else if (buttonState.justPressed(Button::BUTTON_LEFT)) {
+      _screen = UiScreen::Menu;
+    }
+  } else if (_screen == UiScreen::RoboClawStatus) {
+    if (buttonState.justPressed(Button::BUTTON_LEFT)) {
+      _screen = UiScreen::Diagnostics;
+    }
+  } else {
+    if (buttonState.justPressed(Button::BUTTON_YELLOW)) {
+      if (_screen == UiScreen::Manual) {
+        _screen = UiScreen::Auto;
+        _show.begin();
+        _show.setPlaying(false);
+        _model.playing = false;
+        _sequence.reset();
+      } else if (_screen == UiScreen::Auto) {
+        _screen = UiScreen::Manual;
+        _show.setPlaying(false);
+        _model.playing = false;
+      }
+    }
+    if (buttonState.justPressed(Button::BUTTON_RED)) {
+      _model.playing = !_model.playing;
+      _show.setPlaying(_model.playing);
+      _leds.setMode(LED::LED_RED_BUTTON, _model.playing ? LedMode::On : LedMode::Off);
+    }
+    if (buttonState.justPressed(Button::BUTTON_UP) && _model.selectedMotor > 0) {
+      _model.selectedMotor--;
+    }
+    if (buttonState.justPressed(Button::BUTTON_DOWN) && _model.selectedMotor < (MAX_ENDPOINTS - 1)) {
+      _model.selectedMotor++;
+    }
     if (buttonState.justPressed(Button::BUTTON_GREEN)) {
-    if (_leds.getMode(LED::LED_GREEN_BUTTON) == LedMode::Off) {
-      _leds.setMode(LED::LED_GREEN_BUTTON, LedMode::Blink, 50, 450);
-      Serial.println("Green LED to Blink");
-    } else {
-      _leds.setMode(LED::LED_GREEN_BUTTON, LedMode::Off);
-      Serial.println("Green LED to Off");
-    }    
-  }
-
-  if (buttonState.justPressed(Button::BUTTON_OK)) {
-    Serial.println("BUTTON: OK");
-  }
-  if (buttonState.justPressed(Button::BUTTON_DOWN))
-  {
-    Serial.println("BUTTON: DOWN");
-  }
-  if (buttonState.justPressed(Button::BUTTON_UP))
-  {
-    Serial.println("BUTTON: UP");
-  }
-  if (buttonState.justPressed(Button::BUTTON_LEFT))
-  {
-    Serial.println("BUTTON: LEFT");
-  }
-  if (buttonState.justPressed(Button::BUTTON_RIGHT))
-  {
-    Serial.println("BUTTON: RIGHT");
-  }
-
-  for (uint8_t i = 0; i < 8; i++) {
-    if (buttonState.justPressed(static_cast<Button>(i))) {
-      Serial.printf("BUTTON %d pressed!\n", i);
+      const EndpointConfig *ep = nullptr;
+      uint8_t portIndex = 0;
+      if (resolveEndpoint(_config, _model.selectedMotor, ep, portIndex)) {
+        const uint32_t maxVel = (ep->maxVelocity > 0) ? ep->maxVelocity : kMaxVelocityCountsPerSec;
+        const uint32_t maxAcc = (ep->maxAccel > 0) ? ep->maxAccel : kMaxAccelCountsPerSec2;
+        const uint32_t velocity = static_cast<uint32_t>(_model.speedNorm * maxVel);
+        const uint32_t accel = static_cast<uint32_t>(_model.accelNorm * maxAcc);
+        const uint32_t position = static_cast<uint32_t>(_model.jogPos);
+        const bool ok = _roboclaw.commandPosition(portIndex, ep->address, ep->motor, position, velocity, accel);
+        setStatusLine("MOVE %s", ok ? "OK" : "FAIL");
+      } else {
+        setStatusLine("MOVE EP ERR");
+      }
     }
   }
-  
-  // // Button test: log events and mirror button->LED
-  //   const char* names[8] = {"BUTTON_LEFT","BUTTON_RIGHT","BUTTON_DOWN","BUTTON_UP","BUTTON_OK","BUTTON_RED","BUTTON_YELLOW","BUTTON_GREEN"};
-  //   for (uint8_t i = 0; i < 8; i++) {
-  //     if (in.isJustPressed[i]) {
-  //       LOGI("BTN %s: pressed", names[i]);
-  //       //_leds.setBlink(static_cast<LED>(i), 100, 100);
-  //       _leds.setSteady(static_cast<LED>(i), 255); // full on (inverted in driver)
-  //     } else if (in.isJustReleased[i]) {
-  //       LOGI("BTN %s: released", names[i]);
-  //       _leds.setSteady(static_cast<LED>(i), 0);   // off (inverted in driver)
-  //     }
-  //   }
 
-  // // play toggle
-  // if (buttonState.justPressed(Button::BUTTON_YELLOW)) {
-  //   _model.playing = !_model.playing;
-  //   _show.setPlaying(_model.playing);
-  //   _leds.setMode(LED::LED_YELLOW_BUTTON, _model.playing ? LedMode::On : LedMode::Off);
-  //   LOGI("BUTTON_YELLOW -> %s", _model.playing ? "ON" : "OFF");
-  // }
+  if (_screen == UiScreen::EndpointConfigEdit && _endpointConfigEditing && encoderDelta != 0) {
+    adjustEndpointField(encoderDelta);
+  } else if (_screen != UiScreen::EndpointConfig && _screen != UiScreen::EndpointConfigEdit) {
+    _model.jogPos += encoderDelta;
+  }
 
-  // // simple motor select with left/right for now
-  // if (buttonState.justPressed(Button::BUTTON_UP)  && _model.selectedMotor > 0) _model.selectedMotor--;
-  // if (buttonState.justPressed(Button::BUTTON_OK) && _model.selectedMotor < 15) _model.selectedMotor++; // up to 16 motors later
+  if (_screen == UiScreen::Auto && _model.playing && _sequenceLoaded) {
+    _sequence.update(_model.showTimeMs, _roboclaw, _config);
+  }
 
-  // _model.showTimeMs = _show.currentTimeMs();
-   _model.speedNorm  = analogState.potSpeedNorm;
-   _model.accelNorm  = analogState.potAccelNorm;
+  pollRoboClaws();
+
+  const EndpointConfig *selectedEp = nullptr;
+  uint8_t selectedPortIndex = 0;
+  if (resolveEndpoint(_config, _model.selectedMotor, selectedEp, selectedPortIndex)) {
+    const uint8_t endpointIndex = _model.selectedMotor;
+    if (_rcStatusByEndpointValid[endpointIndex]) {
+      _rcStatus = _rcStatusByEndpoint[endpointIndex];
+      _rcStatusValid = true;
+    } else {
+      _rcStatus = {};
+      _rcStatusValid = false;
+    }
+  } else {
+    _rcStatus = {};
+    _rcStatusValid = false;
+  }
+
+  _model.showTimeMs = _show.currentTimeMs();
+  _model.speedNorm  = analogState.potSpeedNorm;
+  _model.accelNorm  = analogState.potAccelNorm;
+  _model.screen = _screen;
+  _model.menuIndex = _menuIndex;
+  _model.settingsIndex = _settingsIndex;
+  _model.diagnosticsIndex = _diagnosticsIndex;
+  _model.endpointConfigIndex = _endpointConfigIndex;
+  _model.endpointConfigField = _endpointConfigField;
+  _model.endpointConfigEditing = _endpointConfigEditing;
+  _model.sdReady = _sdReady;
+  strncpy(_model.statusLine, _statusLine, sizeof(_model.statusLine));
+  _model.statusLine[sizeof(_model.statusLine) - 1] = '\0';
+  _model.rcStatusValid = _rcStatusValid;
+  _model.rcEncValid = _rcStatus.encValid && _rcStatusValid;
+  _model.rcSpeedValid = _rcStatus.speedValid && _rcStatusValid;
+  _model.rcErrorValid = _rcStatus.errorValid && _rcStatusValid;
+  _model.rcEnc1 = _rcStatus.enc1;
+  _model.rcEnc2 = _rcStatus.enc2;
+  _model.rcSpeed1 = _rcStatus.speed1;
+  _model.rcSpeed2 = _rcStatus.speed2;
+  _model.rcError = _rcStatus.error;
+  if (_model.rcEncValid && selectedEp) {
+    _model.rcSelectedEnc = (selectedEp->motor == 1) ? _rcStatus.enc1 : _rcStatus.enc2;
+  } else {
+    _model.rcSelectedEnc = 0;
+  }
+  if (_model.rcSpeedValid && selectedEp) {
+    _model.rcSelectedSpeed = (selectedEp->motor == 1) ? _rcStatus.speed1 : _rcStatus.speed2;
+  } else {
+    _model.rcSelectedSpeed = 0;
+  }
+  _model.sequenceLoaded = _sequenceLoaded;
+  _model.sequenceCount = static_cast<uint16_t>(_sequence.eventCount());
+  _model.sequenceLoopMs = _sequence.loopMs();
+  if (_endpointConfigIndex < MAX_ENDPOINTS) {
+    _model.endpointConfigSelected = _config.endpoints[_endpointConfigIndex];
+  }
+
+  for (uint8_t i = 0; i < MAX_RC_PORTS; i++) {
+    _model.rcPortEnabled[i] = false;
+    _model.rcPortAddress[i] = 0;
+    _model.rcPortStatusValid[i] = false;
+    _model.rcPortEncValid[i] = false;
+    _model.rcPortSpeedValid[i] = false;
+    _model.rcPortErrorValid[i] = false;
+    _model.rcPortEnc1[i] = 0;
+    _model.rcPortEnc2[i] = 0;
+    _model.rcPortSpeed1[i] = 0;
+    _model.rcPortSpeed2[i] = 0;
+    _model.rcPortError[i] = 0;
+  }
+
+  for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
+    const EndpointConfig &ep = _config.endpoints[i];
+    if (!ep.enabled) {
+      continue;
+    }
+    if (ep.serialPort < 1 || ep.serialPort > MAX_RC_PORTS) {
+      continue;
+    }
+    const uint8_t portIndex = static_cast<uint8_t>(ep.serialPort - 1);
+    const bool statusValid = _rcStatusByEndpointValid[i];
+    const RoboClawStatus &status = _rcStatusByEndpoint[i];
+
+    if (!_model.rcPortEnabled[portIndex] || (!_model.rcPortStatusValid[portIndex] && statusValid)) {
+      _model.rcPortEnabled[portIndex] = true;
+      _model.rcPortAddress[portIndex] = ep.address;
+      _model.rcPortStatusValid[portIndex] = statusValid;
+      _model.rcPortEncValid[portIndex] = statusValid && status.encValid;
+      _model.rcPortSpeedValid[portIndex] = statusValid && status.speedValid;
+      _model.rcPortErrorValid[portIndex] = statusValid && status.errorValid;
+      _model.rcPortEnc1[portIndex] = status.enc1;
+      _model.rcPortEnc2[portIndex] = status.enc2;
+      _model.rcPortSpeed1[portIndex] = status.speed1;
+      _model.rcPortSpeed2[portIndex] = status.speed2;
+      _model.rcPortError[portIndex] = status.error;
+    }
+  }
+
+  for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
+    const EndpointConfig &ep = _config.endpoints[i];
+    _model.endpointEnabled[i] = (ep.enabled != 0);
+    _model.endpointConfigPort[i] = ep.serialPort;
+    _model.endpointConfigMotor[i] = ep.motor;
+    _model.endpointConfigAddress[i] = ep.address;
+    if (!_model.endpointEnabled[i]) {
+      _model.endpointStatusValid[i] = false;
+      _model.endpointEncValid[i] = false;
+      _model.endpointSpeedValid[i] = false;
+      _model.endpointPos[i] = 0;
+      _model.endpointSpeed[i] = 0;
+      continue;
+    }
+    const RoboClawStatus &status = _rcStatusByEndpoint[i];
+    const bool statusValid = _rcStatusByEndpointValid[i];
+    _model.endpointStatusValid[i] = statusValid;
+    _model.endpointEncValid[i] = statusValid && status.encValid;
+    _model.endpointSpeedValid[i] = statusValid && status.speedValid;
+    if (ep.motor == 1) {
+      _model.endpointPos[i] = status.enc1;
+      _model.endpointSpeed[i] = status.speed1;
+    } else {
+      _model.endpointPos[i] = status.enc2;
+      _model.endpointSpeed[i] = status.speed2;
+    }
+  }
 
   _leds.update();
 
@@ -190,7 +541,72 @@ void App::loop() {
   _ui.render(_model);
 }
 
-App g_app;
+void App::pollRoboClaws() {
+  const uint32_t now = millis();
+  if ((now - _lastRcPollMs) < kRcPollPeriodMs) {
+    return;
+  }
+  _lastRcPollMs = now;
+
+  for (uint8_t i = 0; i < MAX_ENDPOINTS; ++i) {
+    const uint8_t endpointIndex = static_cast<uint8_t>((_rcPollIndex + i) % MAX_ENDPOINTS);
+    const EndpointConfig *ep = nullptr;
+    uint8_t portIndex = 0;
+    if (!resolveEndpoint(_config, endpointIndex, ep, portIndex)) {
+      continue;
+    }
+    RoboClawStatus status;
+    const bool ok = _roboclaw.readStatus(portIndex, ep->address, status);
+    if (ok) {
+      _rcStatusByEndpoint[endpointIndex] = status;
+    }
+    _rcStatusByEndpointValid[endpointIndex] = ok;
+    _rcPollIndex = static_cast<uint8_t>((endpointIndex + 1) % MAX_ENDPOINTS);
+    return;
+  }
+}
+
+void App::adjustEndpointField(int32_t delta) {
+  if (delta == 0) {
+    return;
+  }
+  if (_endpointConfigIndex >= MAX_ENDPOINTS) {
+    return;
+  }
+  EndpointConfig &ep = _config.endpoints[_endpointConfigIndex];
+  switch (static_cast<EndpointField>(_endpointConfigField)) {
+    case EndpointField::Enabled:
+      ep.enabled = (delta > 0) ? 1 : 0;
+      break;
+    case EndpointField::SerialPort: {
+      const int32_t value = static_cast<int32_t>(ep.serialPort) + delta;
+      ep.serialPort = clampU8(value, kEndpointPortMin, kEndpointPortMax);
+      break;
+    }
+    case EndpointField::Motor: {
+      const int32_t value = static_cast<int32_t>(ep.motor) + delta;
+      ep.motor = clampU8(value, kEndpointMotorMin, kEndpointMotorMax);
+      break;
+    }
+    case EndpointField::Address: {
+      const int32_t value = static_cast<int32_t>(ep.address) + delta;
+      ep.address = clampU8(value, kEndpointAddressMin, kEndpointAddressMax);
+      break;
+    }
+    case EndpointField::MaxVelocity: {
+      const int64_t value = static_cast<int64_t>(ep.maxVelocity) + (static_cast<int64_t>(delta) * kEndpointVelocityStep);
+      ep.maxVelocity = clampU32(value, 0, kEndpointRateMax);
+      break;
+    }
+    case EndpointField::MaxAccel: {
+      const int64_t value = static_cast<int64_t>(ep.maxAccel) + (static_cast<int64_t>(delta) * kEndpointAccelStep);
+      ep.maxAccel = clampU32(value, 0, kEndpointRateMax);
+      break;
+    }
+    default:
+      break;
+  }
+}
 
 /**
  * Description: Arduino setup entry point.
@@ -211,4 +627,433 @@ void setup() {
  */
 void loop() {
   g_app.loop();
+}
+
+void App::handleConsoleCommand(const CommandMsg &msg) {
+  if (strcmp(msg.cmd, "help") == 0) {
+    Serial.println("Commands:");
+    Serial.println("  help");
+    Serial.println("  sd dir [path]");
+    Serial.println("  sd read <path>");
+    Serial.println("  sd test");
+    Serial.println("  config save [anim [path]]");
+    Serial.println("  config reset");
+    Serial.println("  config load anim [path]");
+    Serial.println("  config load endpoints");
+    Serial.println("  config show");
+    Serial.println("  ep list");
+    Serial.println("  ep show <endpoint>");
+    Serial.println("  ep set <endpoint> <field> <value>");
+    Serial.println("  ep save");
+    Serial.println("  seq load [path]");
+    Serial.println("  seq info");
+    Serial.println("  rc status <endpoint>");
+    Serial.println("  rc pos <endpoint> <pos> <vel> <accel>");
+    Serial.println("  rc vel <endpoint> <vel> <accel>");
+    Serial.println("  reboot");
+    return;
+  }
+
+  if (strcmp(msg.cmd, "sd") == 0) {
+    if (!_sdReady) {
+      statusMessage("SD: not ready");
+      return;
+    }
+    if (msg.argc == 0) {
+      statusMessage("sd dir [path] | sd read <path> | sd test");
+      return;
+    }
+    const char *sub = msg.argv[0];
+    if (strcmp(sub, "dir") == 0) {
+      const char *path = (msg.argc > 1) ? msg.argv[1] : "/";
+      if (!_sd.listDir(path, Serial)) {
+        statusMessage("SD: dir failed");
+      }
+      return;
+    }
+    if (strcmp(sub, "read") == 0) {
+      if (msg.argc < 2) {
+        statusMessage("SD: read requires a path");
+        return;
+      }
+      if (!_sd.readFile(msg.argv[1], Serial)) {
+        statusMessage("SD: read failed");
+      }
+      return;
+    }
+    if (strcmp(sub, "test") == 0) {
+      bool ok = _sd.testReadWrite(Serial);
+      statusMessage("SD TEST: %s", ok ? "OK" : "FAIL");
+      return;
+    }
+    statusMessage("SD: unknown subcommand");
+    return;
+  }
+
+  if (strcmp(msg.cmd, "config") == 0) {
+    if (msg.argc == 0) {
+      statusMessage("config save [anim [path]] | config reset | config load anim [path] | config load endpoints | config show");
+      return;
+    }
+    if (strcmp(msg.argv[0], "save") == 0) {
+      _configStore.save(_config);
+      if (msg.argc > 1 && strcmp(msg.argv[1], "anim") == 0) {
+        if (!_sdReady) {
+          statusMessage("CONFIG: SD not ready");
+          return;
+        }
+        const char *path = (msg.argc > 2) ? msg.argv[2] : SdCardManager::kAnimationFilePath;
+        bool ok = _sd.updateAnimationConfig(path, _config, Serial);
+        statusMessage("CONFIG: saved to animation (%s)", ok ? "OK" : "FAIL");
+        return;
+      }
+      bool sdOk = _sdReady && _sd.saveEndpointConfig(_config, Serial);
+      statusMessage("CONFIG: saved (%s)", sdOk ? "EEP+EP" : "EEP");
+      return;
+    }
+    if (strcmp(msg.argv[0], "reset") == 0) {
+      actionResetConfig();
+      Serial.println("CONFIG: reset to defaults");
+      return;
+    }
+    if (strcmp(msg.argv[0], "load") == 0) {
+      if (!_sdReady) {
+        statusMessage("CONFIG: SD not ready");
+        return;
+      }
+      if (msg.argc < 2) {
+        statusMessage("CONFIG: load anim [path] | load endpoints");
+        return;
+      }
+      const char *sub = msg.argv[1];
+      if (strcmp(sub, "anim") == 0) {
+        const char *path = (msg.argc > 2) ? msg.argv[2] : SdCardManager::kAnimationFilePath;
+        if (_sd.loadAnimationConfig(path, _config, Serial)) {
+          _configStore.save(_config);
+          _sequenceLoaded = _sequence.loadFromAnimation(_sd, path, Serial);
+          statusMessage("CONFIG: loaded from animation");
+        } else {
+          statusMessage("CONFIG: animation load failed");
+        }
+        return;
+      }
+      if (strcmp(sub, "endpoints") == 0) {
+        if (_sd.loadEndpointConfig(_config, Serial)) {
+          _configStore.save(_config);
+          statusMessage("CONFIG: loaded from endpoints");
+        } else {
+          statusMessage("CONFIG: endpoints load failed");
+        }
+        return;
+      }
+      statusMessage("CONFIG: unknown load target");
+      return;
+    }
+    if (strcmp(msg.argv[0], "show") == 0) {
+      Serial.printf("CONFIG: endpoints=%u\n", (unsigned)MAX_ENDPOINTS);
+      for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
+        const EndpointConfig &ep = _config.endpoints[i];
+        Serial.printf("  EP%u: port=%u motor=%u addr=0x%02X %s vmax=%lu amax=%lu\n",
+                      (unsigned)(i + 1),
+                      (unsigned)ep.serialPort,
+                      (unsigned)ep.motor,
+                      (unsigned)ep.address,
+                      ep.enabled ? "EN" : "DIS",
+                      (unsigned long)ep.maxVelocity,
+                      (unsigned long)ep.maxAccel);
+      }
+      return;
+    }
+    statusMessage("CONFIG: unknown subcommand");
+    return;
+  }
+
+  if (strcmp(msg.cmd, "ep") == 0 || strcmp(msg.cmd, "endpoint") == 0) {
+    if (msg.argc == 0) {
+      statusMessage("ep list | ep show <endpoint> | ep set <endpoint> <field> <value> | ep save");
+      return;
+    }
+    const char *sub = msg.argv[0];
+    if (strcmp(sub, "list") == 0) {
+      Serial.printf("ENDPOINTS: %u\n", (unsigned)MAX_ENDPOINTS);
+      for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
+        printEndpointConfig(Serial, i, _config.endpoints[i]);
+      }
+      return;
+    }
+    if (strcmp(sub, "show") == 0) {
+      if (msg.argc < 2) {
+        statusMessage("EP: show requires endpoint");
+        return;
+      }
+      uint32_t endpointId = 0;
+      if (!parseUint32(msg.argv[1], endpointId) || endpointId == 0 || endpointId > MAX_ENDPOINTS) {
+        statusMessage("EP: invalid endpoint");
+        return;
+      }
+      const uint8_t endpointIndex = static_cast<uint8_t>(endpointId - 1);
+      printEndpointConfig(Serial, endpointIndex, _config.endpoints[endpointIndex]);
+      return;
+    }
+    if (strcmp(sub, "set") == 0) {
+      if (msg.argc < 4) {
+        statusMessage("EP: set <endpoint> <field> <value>");
+        return;
+      }
+      uint32_t endpointId = 0;
+      if (!parseUint32(msg.argv[1], endpointId) || endpointId == 0 || endpointId > MAX_ENDPOINTS) {
+        statusMessage("EP: invalid endpoint");
+        return;
+      }
+      const uint8_t endpointIndex = static_cast<uint8_t>(endpointId - 1);
+      EndpointField field = EndpointField::Enabled;
+      if (!parseEndpointFieldName(msg.argv[2], field)) {
+        statusMessage("EP: unknown field");
+        return;
+      }
+      EndpointConfig &ep = _config.endpoints[endpointIndex];
+      switch (field) {
+        case EndpointField::Enabled: {
+          uint8_t enabled = 0;
+          if (!parseBoolToken(msg.argv[3], enabled)) {
+            statusMessage("EP: enabled expects on/off/0/1");
+            return;
+          }
+          ep.enabled = enabled;
+          break;
+        }
+        case EndpointField::SerialPort: {
+          uint32_t port = 0;
+          if (!parseUint32(msg.argv[3], port)) {
+            statusMessage("EP: serial expects number");
+            return;
+          }
+          ep.serialPort = clampU8(static_cast<int32_t>(port), kEndpointPortMin, kEndpointPortMax);
+          break;
+        }
+        case EndpointField::Motor: {
+          uint32_t motor = 0;
+          if (!parseUint32(msg.argv[3], motor)) {
+            statusMessage("EP: motor expects number");
+            return;
+          }
+          ep.motor = clampU8(static_cast<int32_t>(motor), kEndpointMotorMin, kEndpointMotorMax);
+          break;
+        }
+        case EndpointField::Address: {
+          uint32_t address = 0;
+          if (!parseUint32(msg.argv[3], address)) {
+            statusMessage("EP: address expects number");
+            return;
+          }
+          ep.address = clampU8(static_cast<int32_t>(address), kEndpointAddressMin, kEndpointAddressMax);
+          break;
+        }
+        case EndpointField::MaxVelocity: {
+          uint32_t vmax = 0;
+          if (!parseUint32(msg.argv[3], vmax)) {
+            statusMessage("EP: vmax expects number");
+            return;
+          }
+          ep.maxVelocity = clampU32(static_cast<int64_t>(vmax), 0, kEndpointRateMax);
+          break;
+        }
+        case EndpointField::MaxAccel: {
+          uint32_t amax = 0;
+          if (!parseUint32(msg.argv[3], amax)) {
+            statusMessage("EP: amax expects number");
+            return;
+          }
+          ep.maxAccel = clampU32(static_cast<int64_t>(amax), 0, kEndpointRateMax);
+          break;
+        }
+        default:
+          statusMessage("EP: unsupported field");
+          return;
+      }
+      statusMessage("EP%u updated", (unsigned)endpointId);
+      return;
+    }
+    if (strcmp(sub, "save") == 0) {
+      actionSaveConfig();
+      Serial.println("EP: save requested");
+      return;
+    }
+    statusMessage("EP: unknown subcommand");
+    return;
+  }
+
+  if (strcmp(msg.cmd, "rc") == 0) {
+    if (msg.argc == 0) {
+      statusMessage("rc status <endpoint> | rc pos <endpoint> <pos> <vel> <accel> | rc vel <endpoint> <vel> <accel>");
+      return;
+    }
+    const char *sub = msg.argv[0];
+    uint32_t endpointId = 0;
+    if (msg.argc < 2 || !parseUint32(msg.argv[1], endpointId) || endpointId == 0 || endpointId > MAX_ENDPOINTS) {
+      statusMessage("RC: invalid endpoint");
+      return;
+    }
+    const uint8_t endpointIndex = static_cast<uint8_t>(endpointId - 1);
+    const EndpointConfig *ep = nullptr;
+    uint8_t portIndex = 0;
+    if (!resolveEndpoint(_config, endpointIndex, ep, portIndex)) {
+      statusMessage("RC: endpoint disabled or invalid");
+      return;
+    }
+
+    if (strcmp(sub, "status") == 0) {
+      RoboClawStatus status;
+      if (_roboclaw.readStatus(portIndex, ep->address, status)) {
+        Serial.printf("RC: ENC1=%lu ENC2=%lu ERR=0x%08lX\n",
+                      (unsigned long)status.enc1,
+                      (unsigned long)status.enc2,
+                      (unsigned long)status.error);
+        setStatusLine("RC: status ok");
+      } else {
+        statusMessage("RC: status read failed");
+      }
+      return;
+    }
+    if (strcmp(sub, "pos") == 0) {
+      if (msg.argc < 5) {
+        statusMessage("RC: pos requires endpoint pos vel accel");
+        return;
+      }
+      int32_t pos = 0;
+      uint32_t vel = 0;
+      uint32_t accel = 0;
+      if (!parseInt32(msg.argv[2], pos) || !parseUint32(msg.argv[3], vel) || !parseUint32(msg.argv[4], accel)) {
+        statusMessage("RC: pos parse error");
+        return;
+      }
+      const bool ok = _roboclaw.commandPosition(portIndex, ep->address, ep->motor,
+                                                static_cast<uint32_t>(pos), vel, accel);
+      statusMessage("RC: pos %s", ok ? "OK" : "FAIL");
+      return;
+    }
+    if (strcmp(sub, "vel") == 0) {
+      if (msg.argc < 4) {
+        statusMessage("RC: vel requires endpoint vel accel");
+        return;
+      }
+      uint32_t vel = 0;
+      uint32_t accel = 0;
+      if (!parseUint32(msg.argv[2], vel) || !parseUint32(msg.argv[3], accel)) {
+        statusMessage("RC: vel parse error");
+        return;
+      }
+      const bool ok = _roboclaw.commandVelocity(portIndex, ep->address, ep->motor, vel, accel);
+      statusMessage("RC: vel %s", ok ? "OK" : "FAIL");
+      return;
+    }
+
+    statusMessage("RC: unknown subcommand");
+    return;
+  }
+
+  if (strcmp(msg.cmd, "seq") == 0) {
+    if (msg.argc == 0) {
+      statusMessage("seq load [path] | seq info");
+      return;
+    }
+    if (strcmp(msg.argv[0], "load") == 0) {
+      if (!_sdReady) {
+        statusMessage("SEQ: SD not ready");
+        return;
+      }
+      const char *path = (msg.argc > 1) ? msg.argv[1] : SdCardManager::kAnimationFilePath;
+      _sequenceLoaded = _sequence.loadFromAnimation(_sd, path, Serial);
+      statusMessage("SEQ: load %s", _sequenceLoaded ? "OK" : "FAIL");
+      return;
+    }
+    if (strcmp(msg.argv[0], "info") == 0) {
+      Serial.printf("SEQ: %s events=%u loop_ms=%lu\n",
+                    _sequenceLoaded ? "LOADED" : "NONE",
+                    (unsigned)_sequence.eventCount(),
+                    (unsigned long)_sequence.loopMs());
+      setStatusLine("SEQ: %s", _sequenceLoaded ? "LOADED" : "NONE");
+      return;
+    }
+    statusMessage("SEQ: unknown subcommand");
+    return;
+  }
+
+  if (strcmp(msg.cmd, "reboot") == 0) {
+    statusMessage("REBOOTING...");
+    rebootNow();
+    return;
+  }
+
+  statusMessage("Unknown command. Type 'help'.");
+}
+
+void App::setStatusLine(const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(_statusLine, sizeof(_statusLine), fmt, args);
+  va_end(args);
+}
+
+void App::statusMessage(const char *fmt, ...) {
+  char buf[96] = {};
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  Serial.println(buf);
+  setStatusLine("%s", buf);
+}
+
+void App::setStatusConfigSave(bool animOk, bool epOk) {
+  if (animOk && epOk) {
+    setStatusLine("CFG SAVE ANIM+EP");
+  } else if (epOk) {
+    setStatusLine("CFG SAVE EP");
+  } else {
+    setStatusLine("CFG SAVE EEPROM");
+  }
+}
+
+void App::setStatusConfigReset(bool animOk, bool epOk) {
+  if (animOk && epOk) {
+    setStatusLine("CFG RESET ANIM+EP");
+  } else if (epOk) {
+    setStatusLine("CFG RESET EP");
+  } else {
+    setStatusLine("CFG RESET EEPROM");
+  }
+}
+
+void App::setStatusSdTest(bool ok) {
+  setStatusLine("SD TEST: %s", ok ? "OK" : "FAIL");
+}
+
+void App::setStatusRebooting() {
+  setStatusLine("REBOOTING");
+}
+
+void App::actionSaveConfig() {
+  _configStore.save(_config);
+  bool animOk = _sdReady && _sd.updateAnimationConfig(SdCardManager::kAnimationFilePath, _config, Serial);
+  bool epOk = _sdReady && _sd.saveEndpointConfig(_config, Serial);
+  setStatusConfigSave(animOk, epOk);
+}
+
+void App::actionResetConfig() {
+  _configStore.setDefaults(_config);
+  _configStore.save(_config);
+  bool animOk = _sdReady && _sd.updateAnimationConfig(SdCardManager::kAnimationFilePath, _config, Serial);
+  bool epOk = _sdReady && _sd.saveEndpointConfig(_config, Serial);
+  setStatusConfigReset(animOk, epOk);
+}
+
+void App::actionSdTest() {
+  bool ok = _sd.testReadWrite(Serial);
+  setStatusSdTest(ok);
+}
+
+void App::actionReboot() {
+  setStatusRebooting();
+  rebootNow();
 }
