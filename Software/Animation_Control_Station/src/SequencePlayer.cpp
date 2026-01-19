@@ -135,6 +135,35 @@ static int compareEvents(const void *a, const void *b) {
   return 0;
 }
 
+static uint32_t clampU32Range(uint32_t value, uint32_t minValue, uint32_t maxValue) {
+  if (maxValue > 0) {
+    if (maxValue < minValue) {
+      minValue = maxValue;
+    }
+    if (value < minValue) {
+      return minValue;
+    }
+    if (value > maxValue) {
+      return maxValue;
+    }
+  } else if (minValue > 0 && value < minValue) {
+    return minValue;
+  }
+  return value;
+}
+
+static int32_t clampI32Range(int32_t value, int32_t minValue, int32_t maxValue) {
+  if (maxValue > minValue) {
+    if (value < minValue) {
+      return minValue;
+    }
+    if (value > maxValue) {
+      return maxValue;
+    }
+  }
+  return value;
+}
+
 static bool resolveEndpoint(const AppConfig &config, uint8_t endpointIndex, const EndpointConfig *&ep, uint8_t &portIndex) {
   if (endpointIndex >= MAX_ENDPOINTS) {
     return false;
@@ -143,15 +172,78 @@ static bool resolveEndpoint(const AppConfig &config, uint8_t endpointIndex, cons
   if (!candidate.enabled) {
     return false;
   }
-  if (candidate.serialPort < 1 || candidate.serialPort > 8) {
+  if (candidate.type != EndpointType::RoboClaw) {
+    return false;
+  }
+  if (candidate.serialPort < 2 || candidate.serialPort > 8) {
     return false;
   }
   if (candidate.motor < 1 || candidate.motor > 2) {
     return false;
   }
+  if (candidate.address > 0xFF) {
+    return false;
+  }
   ep = &candidate;
   portIndex = static_cast<uint8_t>(candidate.serialPort - 1);
   return true;
+}
+
+static bool isCanEndpointType(EndpointType type) {
+  return (type == EndpointType::MksServo ||
+          type == EndpointType::RevFrcCan ||
+          type == EndpointType::JoeServoCan);
+}
+
+static void packCanMotionFrame(int32_t position, uint32_t velocity, uint32_t accel, uint8_t data[8]) {
+  // Generic 8-byte motion frame: int32 position, uint16 velocity, uint16 accel (little-endian).
+  const uint16_t vel16 = (velocity > 0xFFFFu) ? 0xFFFFu : static_cast<uint16_t>(velocity);
+  const uint16_t acc16 = (accel > 0xFFFFu) ? 0xFFFFu : static_cast<uint16_t>(accel);
+  std::memcpy(&data[0], &position, sizeof(position));
+  data[4] = static_cast<uint8_t>(vel16 & 0xFF);
+  data[5] = static_cast<uint8_t>((vel16 >> 8) & 0xFF);
+  data[6] = static_cast<uint8_t>(acc16 & 0xFF);
+  data[7] = static_cast<uint8_t>((acc16 >> 8) & 0xFF);
+}
+
+static void dispatchEvent(const SequenceEvent &ev, RoboClawBus &roboclaw, CanBus &can, const AppConfig &config) {
+  if (ev.endpointId == 0 || ev.endpointId > MAX_ENDPOINTS) {
+    return;
+  }
+  const EndpointConfig &endpoint = config.endpoints[ev.endpointId - 1];
+  if (!endpoint.enabled) {
+    return;
+  }
+
+  if (endpoint.type == EndpointType::RoboClaw) {
+    const EndpointConfig *ep = nullptr;
+    uint8_t portIndex = 0;
+    if (resolveEndpoint(config, static_cast<uint8_t>(ev.endpointId - 1), ep, portIndex)) {
+      uint32_t vel = clampU32Range(ev.velocity, ep->velocityMin, ep->velocityMax);
+      uint32_t acc = clampU32Range(ev.accel, ep->accelMin, ep->accelMax);
+      if (ev.mode == SequenceEvent::Mode::Velocity) {
+        roboclaw.commandVelocity(portIndex, static_cast<uint8_t>(ep->address), ep->motor, vel, acc);
+      } else {
+        int32_t pos = clampI32Range(ev.position, ep->positionMin, ep->positionMax);
+        uint32_t posU = static_cast<uint32_t>(pos);
+        roboclaw.commandPosition(portIndex, static_cast<uint8_t>(ep->address), ep->motor, posU, vel, acc);
+      }
+    }
+  } else if (isCanEndpointType(endpoint.type)) {
+    uint32_t vel = clampU32Range(ev.velocity, endpoint.velocityMin, endpoint.velocityMax);
+    uint32_t acc = clampU32Range(ev.accel, endpoint.accelMin, endpoint.accelMax);
+    int32_t pos = 0;
+    if (ev.mode == SequenceEvent::Mode::Position) {
+      pos = clampI32Range(ev.position, endpoint.positionMin, endpoint.positionMax);
+    }
+    uint8_t data[8] = {};
+    packCanMotionFrame(pos, vel, acc, data);
+    can.send(endpoint.address, data, sizeof(data));
+  }
+}
+
+static const char *modeName(SequenceEvent::Mode mode) {
+  return (mode == SequenceEvent::Mode::Velocity) ? "vel" : "pos";
 }
 
 bool SequencePlayer::loadFromAnimation(SdCardManager &sd, const char *path, Stream &out) {
@@ -264,7 +356,7 @@ bool SequencePlayer::loadFromAnimation(SdCardManager &sd, const char *path, Stre
     return false;
   }
   if (_eventCount > 1) {
-    qsort(_events, _eventCount, sizeof(SequenceEvent), compareEvents);
+    sortEvents();
   }
   _loaded = (_eventCount > 0);
   return _loaded;
@@ -275,7 +367,106 @@ void SequencePlayer::reset() {
   _lastTimeMs = 0;
 }
 
-void SequencePlayer::update(uint32_t timeMs, RoboClawBus &bus, const AppConfig &config) {
+bool SequencePlayer::saveToAnimation(SdCardManager &sd, const char *path, Stream &out) const {
+  FsFile file;
+  if (!sd.openFileWrite(path, file)) {
+    out.printf("SEQ: write failed %s\n", path);
+    return false;
+  }
+  file.println("[sequence]");
+  file.println("# time_ms,endpoint_id,position,velocity,accel,mode");
+  for (size_t i = 0; i < _eventCount; i++) {
+    const SequenceEvent &ev = _events[i];
+    file.printf("%lu,%u,%ld,%lu,%lu,%s\n",
+                (unsigned long)ev.timeMs,
+                (unsigned)ev.endpointId,
+                (long)ev.position,
+                (unsigned long)ev.velocity,
+                (unsigned long)ev.accel,
+                modeName(ev.mode));
+  }
+  file.close();
+  out.printf("SEQ: wrote %s\n", path);
+  return true;
+}
+
+bool SequencePlayer::getEvent(size_t index, SequenceEvent &event) const {
+  if (index >= _eventCount) {
+    return false;
+  }
+  event = _events[index];
+  return true;
+}
+
+bool SequencePlayer::setEvent(size_t index, const SequenceEvent &event, size_t *newIndex, bool keepOrder) {
+  if (index >= _eventCount) {
+    return false;
+  }
+  _events[index] = event;
+  if (keepOrder) {
+    recomputeLoopMs();
+    _nextIndex = 0;
+    _lastTimeMs = 0;
+    _loaded = (_eventCount > 0);
+    if (newIndex) {
+      *newIndex = index;
+    }
+    return true;
+  }
+
+  sortEvents();
+  recomputeLoopMs();
+  _nextIndex = 0;
+  _lastTimeMs = 0;
+  _loaded = (_eventCount > 0);
+  if (newIndex) {
+    size_t found = findEventIndex(event);
+    *newIndex = (found < _eventCount) ? found : index;
+  }
+  return true;
+}
+
+bool SequencePlayer::insertEvent(const SequenceEvent &event, size_t *newIndex) {
+  if (_eventCount >= kMaxEvents) {
+    return false;
+  }
+  _events[_eventCount++] = event;
+  sortEvents();
+  recomputeLoopMs();
+  _nextIndex = 0;
+  _lastTimeMs = 0;
+  _loaded = true;
+  if (newIndex) {
+    size_t found = findEventIndex(event);
+    *newIndex = (found < _eventCount) ? found : (_eventCount - 1);
+  }
+  return true;
+}
+
+bool SequencePlayer::deleteEvent(size_t index) {
+  if (index >= _eventCount) {
+    return false;
+  }
+  for (size_t i = index + 1; i < _eventCount; i++) {
+    _events[i - 1] = _events[i];
+  }
+  _eventCount--;
+  recomputeLoopMs();
+  _nextIndex = 0;
+  _lastTimeMs = 0;
+  _loaded = (_eventCount > 0);
+  return true;
+}
+
+void SequencePlayer::sortForPlayback() {
+  sortEvents();
+  recomputeLoopMs();
+  _nextIndex = 0;
+  _lastTimeMs = 0;
+  _loaded = (_eventCount > 0);
+}
+
+void SequencePlayer::update(uint32_t timeMs, RoboClawBus &roboclaw, CanBus &can, const AppConfig &config) {
   if (!_loaded || _eventCount == 0) {
     return;
   }
@@ -289,22 +480,63 @@ void SequencePlayer::update(uint32_t timeMs, RoboClawBus &bus, const AppConfig &
   }
   _lastTimeMs = t;
 
+  bool pending[MAX_ENDPOINTS] = {};
+  SequenceEvent lastEvent[MAX_ENDPOINTS] = {};
   while (_nextIndex < _eventCount && _events[_nextIndex].timeMs <= t) {
     const SequenceEvent &ev = _events[_nextIndex];
-    const EndpointConfig *ep = nullptr;
-    uint8_t portIndex = 0;
-    if (resolveEndpoint(config, static_cast<uint8_t>(ev.endpointId - 1), ep, portIndex)) {
-      const uint32_t maxVel = (ep->maxVelocity > 0) ? ep->maxVelocity : 1;
-      const uint32_t maxAcc = (ep->maxAccel > 0) ? ep->maxAccel : 1;
-      uint32_t vel = (ev.velocity > maxVel) ? maxVel : ev.velocity;
-      uint32_t acc = (ev.accel > maxAcc) ? maxAcc : ev.accel;
-      if (ev.mode == SequenceEvent::Mode::Velocity) {
-        bus.commandVelocity(portIndex, ep->address, ep->motor, vel, acc);
-      } else {
-        uint32_t pos = (ev.position < 0) ? 0u : static_cast<uint32_t>(ev.position);
-        bus.commandPosition(portIndex, ep->address, ep->motor, pos, vel, acc);
-      }
+    if (ev.endpointId > 0 && ev.endpointId <= MAX_ENDPOINTS) {
+      const uint8_t endpointIndex = static_cast<uint8_t>(ev.endpointId - 1);
+      pending[endpointIndex] = true;
+      lastEvent[endpointIndex] = ev;
     }
     _nextIndex++;
   }
+
+  for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
+    if (!pending[i]) {
+      continue;
+    }
+    dispatchEvent(lastEvent[i], roboclaw, can, config);
+  }
+}
+
+void SequencePlayer::sortEvents() {
+  if (_eventCount <= 1) {
+    return;
+  }
+  // Stable insertion sort to preserve order for identical time/endpoint entries.
+  for (size_t i = 1; i < _eventCount; i++) {
+    SequenceEvent key = _events[i];
+    size_t j = i;
+    while (j > 0 && compareEvents(&key, &_events[j - 1]) < 0) {
+      _events[j] = _events[j - 1];
+      j--;
+    }
+    _events[j] = key;
+  }
+}
+
+void SequencePlayer::recomputeLoopMs() {
+  _loopMs = 0;
+  for (size_t i = 0; i < _eventCount; i++) {
+    if (_events[i].timeMs > _loopMs) {
+      _loopMs = _events[i].timeMs;
+    }
+  }
+}
+
+size_t SequencePlayer::findEventIndex(const SequenceEvent &event) const {
+  for (size_t i = 0; i < _eventCount; i++) {
+    const SequenceEvent &candidate = _events[i];
+    if (candidate.timeMs != event.timeMs ||
+        candidate.endpointId != event.endpointId ||
+        candidate.position != event.position ||
+        candidate.velocity != event.velocity ||
+        candidate.accel != event.accel ||
+        candidate.mode != event.mode) {
+      continue;
+    }
+    return i;
+  }
+  return _eventCount;
 }

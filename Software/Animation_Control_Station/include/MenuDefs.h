@@ -8,6 +8,7 @@ using MenuCallback = void (*)(App &app);
 enum class MenuAction : uint8_t {
   OpenEndpoints,
   OpenEndpointConfig,
+  OpenEdit,
   OpenSettings,
   OpenDiagnostics,
   OpenRoboClawStatus,
@@ -41,6 +42,7 @@ constexpr MenuItem ActionItem(const char *label, MenuAction action, MenuCallback
 static constexpr MenuItem MENU_ITEMS[] = {
   ScreenItem("Endpoints", MenuAction::OpenEndpoints, UiScreen::Endpoints),
   ScreenItem("Endpoint Config", MenuAction::OpenEndpointConfig, UiScreen::EndpointConfig),
+  ActionItem("Edit Sequence", MenuAction::OpenEdit, MenuActionEditSequence),
   ScreenItem("Settings", MenuAction::OpenSettings, UiScreen::Settings),
   ScreenItem("Diagnostics", MenuAction::OpenDiagnostics, UiScreen::Diagnostics)
 };

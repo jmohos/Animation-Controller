@@ -1,16 +1,22 @@
 #pragma once
 #include <Arduino.h>
 #include <EEPROM.h>
+#include "EndpointTypes.h"
 
 static constexpr uint8_t MAX_ENDPOINTS = 16;
 
 struct EndpointConfig {
-  uint8_t serialPort = 1; // 1-8
-  uint8_t motor = 1;      // 1=M1, 2=M2
-  uint8_t address = 0x80; // RoboClaw address
+  EndpointType type = EndpointType::RoboClaw;
+  uint8_t serialPort = 1;  // Interface index (1=CAN, 2-8=RS422 ports)
+  uint8_t motor = 1;       // RoboClaw motor (1=M1, 2=M2), 0 when unused
+  uint32_t address = 0x80; // Device address / CAN ID
   uint8_t enabled = 1;
-  uint32_t maxVelocity = 50000;
-  uint32_t maxAccel = 50000;
+  int32_t positionMin = 0;
+  int32_t positionMax = 0;
+  uint32_t velocityMin = 0;
+  uint32_t velocityMax = 50000;
+  uint32_t accelMin = 0;
+  uint32_t accelMax = 50000;
 };
 
 struct AppConfig {
@@ -47,5 +53,5 @@ public:
 
 private:
   static constexpr uint32_t kMagic = 0x43464731; // "CFG1"
-  static constexpr uint16_t kVersion = 4;
+  static constexpr uint16_t kVersion = 5;
 };

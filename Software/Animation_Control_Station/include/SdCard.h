@@ -68,7 +68,7 @@ public:
   bool saveEndpointConfig(const AppConfig &cfg, Stream &out);
 
   /**
-   * Description: Load endpoint configuration from an animation file section.
+   * Description: Legacy endpoint loader (animation files now only hold sequences).
    * Inputs:
    * - path: animation file path.
    * - cfg: configuration structure to update.
@@ -78,7 +78,7 @@ public:
   bool loadAnimationConfig(const char *path, AppConfig &cfg, Stream &out);
 
   /**
-   * Description: Save endpoint configuration to an animation file.
+   * Description: Create a sequence-only animation file with a [sequence] section.
    * Inputs:
    * - path: animation file path.
    * - cfg: configuration structure to persist.
@@ -88,7 +88,16 @@ public:
   bool saveAnimationConfig(const char *path, const AppConfig &cfg, Stream &out);
 
   /**
-   * Description: Update only the [endpoints] section in an animation file.
+   * Description: Write the built-in default animation sequence.
+   * Inputs:
+   * - path: animation file path.
+   * - out: output stream for status messages.
+   * Outputs: Returns true on success.
+   */
+  bool saveDefaultAnimation(const char *path, Stream &out);
+
+  /**
+   * Description: Ensure an animation file exists (sequence-only).
    * Inputs:
    * - path: animation file path.
    * - cfg: configuration structure to persist.
@@ -106,11 +115,21 @@ public:
    */
   bool openFile(const char *path, FsFile &file);
 
+  /**
+   * Description: Open a file for write access (truncate/create).
+   * Inputs:
+   * - path: file path to open.
+   * - file: output file handle.
+   * Outputs: Returns true on success.
+   */
+  bool openFileWrite(const char *path, FsFile &file);
+
 private:
   SdFs _sd;
   bool _ready = false;
 
   bool readLine(FsFile &file, char *buf, size_t len);
+  bool parseInt(const char *token, int32_t &value);
   bool parseUint(const char *token, uint32_t &value);
   bool isSectionLine(const char *line, const char *section) const;
   void stripInlineComment(char *line) const;

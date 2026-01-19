@@ -56,11 +56,12 @@ bool RoboClawBus::commandPosition(uint8_t portIndex, uint8_t address, uint8_t mo
   }
   RoboClaw *rc = _claws[portIndex];
   const uint32_t deccel = accel;
+  const uint8_t flags = 1; // RoboClaw: 1 executes immediately, 0 queues.
   if (motor == 1) {
-    return rc->SpeedAccelDeccelPositionM1(address, accel, velocity, deccel, position, 0);
+    return rc->SpeedAccelDeccelPositionM1(address, accel, velocity, deccel, position, flags);
   }
   if (motor == 2) {
-    return rc->SpeedAccelDeccelPositionM2(address, accel, velocity, deccel, position, 0);
+    return rc->SpeedAccelDeccelPositionM2(address, accel, velocity, deccel, position, flags);
   }
   return false;
 }

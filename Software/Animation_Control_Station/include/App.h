@@ -10,6 +10,7 @@
 #include "ConfigStore.h"
 #include "SdCard.h"
 #include "RoboClawBus.h"
+#include "CanBus.h"
 #include "SequencePlayer.h"
 
 class App {
@@ -43,15 +44,22 @@ public:
    */
   void actionSaveConfig();
   void actionResetConfig();
+  void actionFactoryReset();
+  void actionOpenEdit();
   void actionSdTest();
   void actionReboot();
 
 private:
   void pollRoboClaws();
+  void stopRoboClaws();
+  void saveAnimationEdits();
+  bool getEditEvent(SequenceEvent &event, uint16_t &ordinal, uint16_t &count);
+  bool selectFirstEditEvent(uint8_t endpointId);
+  bool selectNeighborEditEvent(uint8_t endpointId, size_t startIndex);
   void adjustEndpointField(int32_t delta);
   void setStatusLine(const char *fmt, ...);
-  void setStatusConfigSave(bool animOk, bool epOk);
-  void setStatusConfigReset(bool animOk, bool epOk);
+  void setStatusConfigSave(bool epOk);
+  void setStatusConfigReset(bool epOk);
   void setStatusSdTest(bool ok);
   void setStatusRebooting();
   void statusMessage(const char *fmt, ...);
@@ -65,6 +73,7 @@ private:
   EncoderJog _enc;
   Rs422Ports _rs422;
   RoboClawBus _roboclaw;
+  CanBus _can;
   ConfigStore _configStore;
   AppConfig _config;
   SdCardManager _sd;
@@ -72,15 +81,18 @@ private:
   UiModel _model;
   UiScreen _screen = UiScreen::Boot;
   UiScreen _screenBeforeMenu = UiScreen::Manual;
+  UiScreen _lastRunScreen = UiScreen::Manual;
   uint8_t _menuIndex = 0;
   uint8_t _settingsIndex = 0;
   uint8_t _diagnosticsIndex = 0;
   uint8_t _endpointConfigIndex = 0;
   uint8_t _endpointConfigField = 0;
   bool _endpointConfigEditing = false;
+  size_t _editEventIndex = 0;
+  uint8_t _editField = 0;
+  int32_t _editPosTickAccum = 0;
   bool _sdReady = false;
   bool _configLoaded = false;
-  bool _configFromAnim = false;
   bool _configFromEndpoints = false;
   bool _sequenceLoaded = false;
   char _statusLine[32] = {};

@@ -114,74 +114,81 @@ bool SdCardManager::loadEndpointConfig(AppConfig &cfg, Stream &out) {
     }
 
     char *token = strtok(cursor, ",");
-    char *tokens[8] = {};
+    char *tokens[12] = {};
     uint8_t count = 0;
-    while (token && count < 8) {
+    while (token && count < 12) {
       tokens[count++] = token;
       token = strtok(nullptr, ",");
     }
-    if (count < 5) {
-      out.printf("CFG: skip line (need 5 fields): %s\n", line);
+    if (count < 12) {
+      out.printf("CFG: skip line (need 12 fields): %s\n", line);
       continue;
     }
 
     uint32_t endpointId = 0;
-    uint32_t port = 0;
+    EndpointType type = EndpointType::RoboClaw;
     uint32_t address = 0;
-    uint32_t motor = 0;
     uint32_t enabled = 0;
-    uint32_t maxVelocity = 0;
-    uint32_t maxAccel = 0;
-    bool hasVelocity = false;
-    bool hasAccel = false;
+    int32_t posMin = 0;
+    int32_t posMax = 0;
+    uint32_t velMin = 0;
+    uint32_t velMax = 0;
+    uint32_t accMin = 0;
+    uint32_t accMax = 0;
+    uint32_t port = 0;
+    uint32_t motor = 0;
     if (!parseUint(tokens[0], endpointId) ||
-        !parseUint(tokens[1], port) ||
+        !parseEndpointType(tokens[1], type) ||
         !parseUint(tokens[2], address) ||
-        !parseUint(tokens[3], motor) ||
-        !parseUint(tokens[4], enabled)) {
+        !parseUint(tokens[3], enabled) ||
+        !parseInt(tokens[4], posMin) ||
+        !parseInt(tokens[5], posMax) ||
+        !parseUint(tokens[6], velMin) ||
+        !parseUint(tokens[7], velMax) ||
+        !parseUint(tokens[8], accMin) ||
+        !parseUint(tokens[9], accMax) ||
+        !parseUint(tokens[10], port) ||
+        !parseUint(tokens[11], motor)) {
       out.printf("CFG: parse error: %s\n", line);
       continue;
-    }
-    if (count == 6) {
-      if (!parseUint(tokens[5], maxVelocity)) {
-        out.printf("CFG: max_velocity parse error: %s\n", line);
-        continue;
-      }
-      hasVelocity = true;
-    } else if (count == 7) {
-      if (!parseUint(tokens[5], maxVelocity) || !parseUint(tokens[6], maxAccel)) {
-        out.printf("CFG: max_velocity/max_accel parse error: %s\n", line);
-        continue;
-      }
-      hasVelocity = true;
-      hasAccel = true;
-    } else if (count >= 8) {
-      if (!parseUint(tokens[6], maxVelocity) || !parseUint(tokens[7], maxAccel)) {
-        out.printf("CFG: max_velocity/max_accel parse error: %s\n", line);
-        continue;
-      }
-      hasVelocity = true;
-      hasAccel = true;
     }
 
     if (endpointId == 0 || endpointId > MAX_ENDPOINTS) {
       out.printf("CFG: invalid endpoint %lu\n", (unsigned long)endpointId);
       continue;
     }
+    const bool usesCan = (type == EndpointType::MksServo ||
+                          type == EndpointType::RevFrcCan ||
+                          type == EndpointType::JoeServoCan);
+    if (!usesCan && enabled != 0) {
+      if (port < 2 || port > 8) {
+        out.printf("CFG: serial port must be 2-8: %s\n", line);
+        continue;
+      }
+    }
+    if (type == EndpointType::RoboClaw && enabled != 0) {
+      if (port < 2 || port > 8) {
+        out.printf("CFG: RoboClaw port must be 2-8: %s\n", line);
+        continue;
+      }
+      if (motor < 1 || motor > 2) {
+        out.printf("CFG: RoboClaw motor must be 1-2: %s\n", line);
+        continue;
+      }
+    }
 
     EndpointConfig &ep = cfg.endpoints[endpointId - 1];
-    if (!hasVelocity) {
-      maxVelocity = ep.maxVelocity;
-    }
-    if (!hasAccel) {
-      maxAccel = ep.maxAccel;
-    }
-    ep.serialPort = (port >= 1 && port <= 8) ? static_cast<uint8_t>(port) : ep.serialPort;
-    ep.address = (address <= 0xFF) ? static_cast<uint8_t>(address) : ep.address;
-    ep.motor = (motor == 1 || motor == 2) ? static_cast<uint8_t>(motor) : ep.motor;
+    ep.type = type;
+    ep.address = address;
     ep.enabled = (enabled != 0);
-    ep.maxVelocity = maxVelocity;
-    ep.maxAccel = maxAccel;
+    ep.positionMin = posMin;
+    ep.positionMax = posMax;
+    ep.velocityMin = velMin;
+    ep.velocityMax = velMax;
+    ep.accelMin = accMin;
+    ep.accelMax = accMax;
+    ep.serialPort = (port <= 8) ? static_cast<uint8_t>(port) : ep.serialPort;
+    ep.motor = (motor <= 2) ? static_cast<uint8_t>(motor) : ep.motor;
   }
 
   file.close();
@@ -196,17 +203,22 @@ bool SdCardManager::saveEndpointConfig(const AppConfig &cfg, Stream &out) {
   if (!file) {
     return false;
   }
-  file.println("# endpoint_id,serial_port,address,motor,enabled,max_velocity,max_accel");
+  file.println("# endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor");
   for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
     const EndpointConfig &ep = cfg.endpoints[i];
-    file.printf("%u,%u,0x%02X,%u,%u,%lu,%lu\n",
+    file.printf("%u,%s,0x%08lX,%u,%ld,%ld,%lu,%lu,%lu,%lu,%u,%u\n",
                 (unsigned)(i + 1),
-                (unsigned)ep.serialPort,
-                (unsigned)ep.address,
-                (unsigned)ep.motor,
+                endpointTypeName(ep.type),
+                (unsigned long)ep.address,
                 (unsigned)(ep.enabled ? 1 : 0),
-                (unsigned long)ep.maxVelocity,
-                (unsigned long)ep.maxAccel);
+                (long)ep.positionMin,
+                (long)ep.positionMax,
+                (unsigned long)ep.velocityMin,
+                (unsigned long)ep.velocityMax,
+                (unsigned long)ep.accelMin,
+                (unsigned long)ep.accelMax,
+                (unsigned)ep.serialPort,
+                (unsigned)ep.motor);
   }
   file.close();
   out.printf("CFG: wrote %s\n", kEndpointConfigPath);
@@ -214,6 +226,7 @@ bool SdCardManager::saveEndpointConfig(const AppConfig &cfg, Stream &out) {
 }
 
 bool SdCardManager::loadAnimationConfig(const char *path, AppConfig &cfg, Stream &out) {
+  (void)cfg;
   if (!_ready) {
     return false;
   }
@@ -221,99 +234,13 @@ bool SdCardManager::loadAnimationConfig(const char *path, AppConfig &cfg, Stream
   if (!file) {
     return false;
   }
-
-  bool inEndpoints = false;
-  bool sawEndpoints = false;
-  char line[160] = {};
-  while (readLine(file, line, sizeof(line))) {
-    char *cursor = line;
-    while (*cursor == ' ' || *cursor == '\t') {
-      cursor++;
-    }
-    if (*cursor == '\0') {
-      continue;
-    }
-    if (isSectionLine(cursor, "endpoints")) {
-      inEndpoints = true;
-      sawEndpoints = true;
-      continue;
-    }
-    if (isSectionLine(cursor, "sequence")) {
-      inEndpoints = false;
-      continue;
-    }
-
-    stripInlineComment(cursor);
-    while (*cursor == ' ' || *cursor == '\t') {
-      cursor++;
-    }
-    if (*cursor == '\0' || *cursor == '#') {
-      continue;
-    }
-    if (!inEndpoints) {
-      continue;
-    }
-
-    char *token = strtok(cursor, ",");
-    char *tokens[8] = {};
-    uint8_t count = 0;
-    while (token && count < 8) {
-      tokens[count++] = token;
-      token = strtok(nullptr, ",");
-    }
-    if (count < 7) {
-      out.printf("ANIM: skip line (need 7 fields): %s\n", line);
-      continue;
-    }
-
-    uint32_t endpointId = 0;
-    uint32_t port = 0;
-    uint32_t address = 0;
-    uint32_t motor = 0;
-    uint32_t enabled = 0;
-    uint32_t maxVelocity = 0;
-    uint32_t maxAccel = 0;
-    if (!parseUint(tokens[0], endpointId) ||
-        !parseUint(tokens[1], port) ||
-        !parseUint(tokens[2], address) ||
-        !parseUint(tokens[3], motor) ||
-        !parseUint(tokens[4], enabled)) {
-      out.printf("ANIM: parse error: %s\n", line);
-      continue;
-    }
-    if (count == 7) {
-      if (!parseUint(tokens[5], maxVelocity) || !parseUint(tokens[6], maxAccel)) {
-        out.printf("ANIM: max_velocity/max_accel parse error: %s\n", line);
-        continue;
-      }
-    } else {
-      if (!parseUint(tokens[6], maxVelocity) || !parseUint(tokens[7], maxAccel)) {
-        out.printf("ANIM: max_velocity/max_accel parse error: %s\n", line);
-        continue;
-      }
-    }
-    if (endpointId == 0 || endpointId > MAX_ENDPOINTS) {
-      out.printf("ANIM: invalid endpoint %lu\n", (unsigned long)endpointId);
-      continue;
-    }
-
-    EndpointConfig &ep = cfg.endpoints[endpointId - 1];
-    ep.serialPort = (port >= 1 && port <= 8) ? static_cast<uint8_t>(port) : ep.serialPort;
-    ep.address = (address <= 0xFF) ? static_cast<uint8_t>(address) : ep.address;
-    ep.motor = (motor == 1 || motor == 2) ? static_cast<uint8_t>(motor) : ep.motor;
-    ep.enabled = (enabled != 0);
-    ep.maxVelocity = maxVelocity;
-    ep.maxAccel = maxAccel;
-  }
-
   file.close();
-  if (!sawEndpoints) {
-    out.println("ANIM: no [endpoints] section found");
-  }
-  return sawEndpoints;
+  out.println("ANIM: endpoints moved to endpoints.csv");
+  return false;
 }
 
 bool SdCardManager::saveAnimationConfig(const char *path, const AppConfig &cfg, Stream &out) {
+  (void)cfg;
   if (!_ready) {
     return false;
   }
@@ -321,8 +248,6 @@ bool SdCardManager::saveAnimationConfig(const char *path, const AppConfig &cfg, 
   if (!file) {
     return false;
   }
-  writeEndpointsSection(file, cfg);
-  file.println();
   file.println("[sequence]");
   file.println("# time_ms,endpoint_id,position,velocity,accel,mode");
   file.close();
@@ -330,180 +255,51 @@ bool SdCardManager::saveAnimationConfig(const char *path, const AppConfig &cfg, 
   return true;
 }
 
-bool SdCardManager::updateAnimationConfig(const char *path, const AppConfig &cfg, Stream &out) {
+bool SdCardManager::saveDefaultAnimation(const char *path, Stream &out) {
   if (!_ready) {
     return false;
   }
-  if (!_sd.exists(path)) {
-    return saveAnimationConfig(path, cfg, out);
-  }
-
-  FsFile input = _sd.open(path, O_RDONLY);
-  if (!input) {
+  FsFile file = _sd.open(path, O_WRITE | O_CREAT | O_TRUNC);
+  if (!file) {
     return false;
   }
-  const char *tmpPath = "/anim_tmp.csv";
-  FsFile output = _sd.open(tmpPath, O_WRITE | O_CREAT | O_TRUNC);
-  if (!output) {
-    input.close();
-    return false;
-  }
-
-  bool sawEndpoints = false;
-  bool inEndpoints = false;
-  bool insertedEndpoints = false;
-  bool skipEndpoints = false;
-  bool updated[MAX_ENDPOINTS] = {};
-  char line[160] = {};
-  while (readLine(input, line, sizeof(line))) {
-    char original[160] = {};
-    snprintf(original, sizeof(original), "%s", line);
-
-    char *cursor = line;
-    while (*cursor == ' ' || *cursor == '\t') {
-      cursor++;
-    }
-
-    if (!sawEndpoints && isSectionLine(cursor, "sequence")) {
-      writeEndpointsSection(output, cfg);
-      output.println();
-      insertedEndpoints = true;
-      output.println(original);
-      continue;
-    }
-
-    if (isSectionLine(cursor, "endpoints")) {
-      sawEndpoints = true;
-      if (insertedEndpoints) {
-        inEndpoints = true;
-        skipEndpoints = true;
-      } else {
-        inEndpoints = true;
-        output.println(original);
-      }
-      continue;
-    }
-
-    if (isSectionLine(cursor, "sequence")) {
-      if (inEndpoints) {
-        if (skipEndpoints) {
-          inEndpoints = false;
-          skipEndpoints = false;
-          output.println(original);
-          continue;
-        }
-        bool addedAny = false;
-        for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
-          if (!updated[i]) {
-            if (!addedAny) {
-              output.println("# auto-added endpoints");
-              addedAny = true;
-            }
-            const EndpointConfig &ep = cfg.endpoints[i];
-            output.printf("%u,%u,0x%02X,%u,%u,%lu,%lu\n",
-                          (unsigned)(i + 1),
-                          (unsigned)ep.serialPort,
-                          (unsigned)ep.address,
-                          (unsigned)ep.motor,
-                          (unsigned)(ep.enabled ? 1 : 0),
-                          (unsigned long)ep.maxVelocity,
-                          (unsigned long)ep.maxAccel);
-          }
-        }
-        inEndpoints = false;
-      }
-      output.println(original);
-      continue;
-    }
-
-    if (inEndpoints) {
-      if (skipEndpoints) {
-        continue;
-      }
-      const char *trimmed = original;
-      while (*trimmed == ' ' || *trimmed == '\t') {
-        trimmed++;
-      }
-      if (*trimmed == '#') {
-        if (strstr(trimmed, "endpoint_id") != nullptr) {
-          output.println("# endpoint_id,serial_port,address,motor,enabled,max_velocity,max_accel");
-          continue;
-        }
-      }
-      char data[160] = {};
-      snprintf(data, sizeof(data), "%s", original);
-      char *comment = strchr(data, '#');
-      if (comment) {
-        *comment = '\0';
-      }
-      char *dataCursor = data;
-      while (*dataCursor == ' ' || *dataCursor == '\t') {
-        dataCursor++;
-      }
-      if (*dataCursor == '\0') {
-        output.println(original);
-        continue;
-      }
-
-      char prefix[32] = {};
-      size_t prefixLen = 0;
-      const char *origCursor = original;
-      while (*origCursor == ' ' || *origCursor == '\t') {
-        if (prefixLen + 1 < sizeof(prefix)) {
-          prefix[prefixLen++] = *origCursor;
-          prefix[prefixLen] = '\0';
-        }
-        origCursor++;
-      }
-
-      char *token = strtok(dataCursor, ",");
-      if (token) {
-        uint32_t endpointId = 0;
-        if (parseUint(token, endpointId) && endpointId >= 1 && endpointId <= MAX_ENDPOINTS) {
-          const EndpointConfig &ep = cfg.endpoints[endpointId - 1];
-          output.print(prefix);
-          output.printf("%u,%u,0x%02X,%u,%u,%lu,%lu",
-                        (unsigned)endpointId,
-                        (unsigned)ep.serialPort,
-                        (unsigned)ep.address,
-                        (unsigned)ep.motor,
-                        (unsigned)(ep.enabled ? 1 : 0),
-                        (unsigned long)ep.maxVelocity,
-                        (unsigned long)ep.maxAccel);
-          const char *commentOut = strchr(original, '#');
-          if (commentOut) {
-            output.print(" ");
-            output.print(commentOut);
-          }
-          output.println();
-          updated[endpointId - 1] = true;
-          continue;
-        }
-      }
-
-      output.println(original);
-      continue;
-    }
-
-    output.println(original);
-  }
-
-  input.close();
-  output.close();
-
-  if (!sawEndpoints && !insertedEndpoints) {
-    FsFile appendFile = _sd.open(tmpPath, O_WRITE | O_APPEND);
-    if (appendFile) {
-      appendFile.println();
-      writeEndpointsSection(appendFile, cfg);
-      appendFile.close();
-    }
-  }
-
-  _sd.remove(path);
-  _sd.rename(tmpPath, path);
-  out.printf("ANIM: updated %s\n", path);
+  file.println("[sequence]");
+  file.println("# time_ms,endpoint_id,position,velocity,accel,mode");
+  file.println("0,1,0,800,250,pos");
+  file.println("0,2,0,800,250,pos");
+  file.println("0,3,0,800,250,pos");
+  file.println("0,4,0,800,250,pos");
+  file.println("2000,1,1000,800,250,pos");
+  file.println("2000,2,1000,800,250,pos");
+  file.println("2000,3,1000,800,250,pos");
+  file.println("2000,4,1000,800,250,pos");
+  file.println("4000,1,0,800,250,pos");
+  file.println("4000,2,0,800,250,pos");
+  file.println("4000,3,0,800,250,pos");
+  file.println("4000,4,0,800,250,pos");
+  file.println("6000,1,-1000,800,250,pos");
+  file.println("6000,2,-1000,800,250,pos");
+  file.println("6000,3,-1000,800,250,pos");
+  file.println("6000,4,-1000,800,250,pos");
+  file.println("8000,1,0,800,250,pos");
+  file.println("8000,2,0,800,250,pos");
+  file.println("8000,3,0,800,250,pos");
+  file.println("8000,4,0,800,250,pos");
+  file.close();
+  out.printf("ANIM: wrote default %s\n", path);
   return true;
+}
+
+bool SdCardManager::updateAnimationConfig(const char *path, const AppConfig &cfg, Stream &out) {
+  (void)cfg;
+  if (!_ready) {
+    return false;
+  }
+  if (_sd.exists(path)) {
+    out.printf("ANIM: exists %s\n", path);
+    return true;
+  }
+  return saveAnimationConfig(path, cfg, out);
 }
 
 bool SdCardManager::readLine(FsFile &file, char *buf, size_t len) {
@@ -527,6 +323,29 @@ bool SdCardManager::readLine(FsFile &file, char *buf, size_t len) {
   }
   buf[idx] = '\0';
   return gotAny;
+}
+
+bool SdCardManager::parseInt(const char *token, int32_t &value) {
+  if (!token) {
+    return false;
+  }
+  while (*token == ' ' || *token == '\t') {
+    token++;
+  }
+  if (*token == '\0') {
+    return false;
+  }
+  int base = 10;
+  if (token[0] == '0' && (token[1] == 'x' || token[1] == 'X')) {
+    base = 16;
+  }
+  char *end = nullptr;
+  long parsed = strtol(token, &end, base);
+  if (end == token) {
+    return false;
+  }
+  value = static_cast<int32_t>(parsed);
+  return true;
 }
 
 bool SdCardManager::parseUint(const char *token, uint32_t &value) {
@@ -592,17 +411,22 @@ void SdCardManager::stripInlineComment(char *line) const {
 
 void SdCardManager::writeEndpointsSection(FsFile &file, const AppConfig &cfg) {
   file.println("[endpoints]");
-  file.println("# endpoint_id,serial_port,address,motor,enabled,max_velocity,max_accel");
+  file.println("# endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor");
   for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
     const EndpointConfig &ep = cfg.endpoints[i];
-    file.printf("%u,%u,0x%02X,%u,%u,%lu,%lu\n",
+    file.printf("%u,%s,0x%08lX,%u,%ld,%ld,%lu,%lu,%lu,%lu,%u,%u\n",
                 (unsigned)(i + 1),
-                (unsigned)ep.serialPort,
-                (unsigned)ep.address,
-                (unsigned)ep.motor,
+                endpointTypeName(ep.type),
+                (unsigned long)ep.address,
                 (unsigned)(ep.enabled ? 1 : 0),
-                (unsigned long)ep.maxVelocity,
-                (unsigned long)ep.maxAccel);
+                (long)ep.positionMin,
+                (long)ep.positionMax,
+                (unsigned long)ep.velocityMin,
+                (unsigned long)ep.velocityMax,
+                (unsigned long)ep.accelMin,
+                (unsigned long)ep.accelMax,
+                (unsigned)ep.serialPort,
+                (unsigned)ep.motor);
   }
 }
 
@@ -611,5 +435,13 @@ bool SdCardManager::openFile(const char *path, FsFile &file) {
     return false;
   }
   file = _sd.open(path, O_RDONLY);
+  return static_cast<bool>(file);
+}
+
+bool SdCardManager::openFileWrite(const char *path, FsFile &file) {
+  if (!_ready) {
+    return false;
+  }
+  file = _sd.open(path, O_WRITE | O_CREAT | O_TRUNC);
   return static_cast<bool>(file);
 }

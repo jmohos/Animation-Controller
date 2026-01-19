@@ -26,7 +26,7 @@ To faciliate the orchestration of an animated robotic system, an animation contr
 The key high level requirements include:
 * A single control assembly that can operate on 12VDC power input.
 * Has a user interface for the local animation operator to monitor the overall animation, control the selected animation process, manually control elements and edit the animation sequence.
-* Can control a series of robotic endpoints using up to 8 full-duplex serial ports.
+* Can control a series of robotic endpoints using one CAN bus plus up to 7 full-duplex serial ports (Serial1 pins 0/1 reserved for CAN).
 * Robotic endpoints can be either motion, light or sound controllers.
 * The motion control endpoints will include the BasicMicro Roboclaw controllers which can control either 1 or 2 motors via a single serial interface.
 * RoboClaw controllers must be configured for Packet Serial mode at 115200 baud.
@@ -36,53 +36,52 @@ The key high level requirements include:
 * Animation sequences shall be stored in a portable animation sequence file that contains the time-based steps for each animation endpoint.
 * Animation sequences are stored on the animation controller SD card.
 
-## Animation File (CSV with Sections)
-The controller reads a human-editable CSV file from the SD card. The file defines a single looping animation with a maximum duration of 5 minutes (300000 ms). Configuration lives inside the animation file so it is the single source of truth for endpoints and limits.
-
-Section markers:
-- `[endpoints]` for endpoint configuration
-- `[sequence]` for time-based animation steps
+## Endpoint and Animation Files
+Endpoint configuration lives in `/endpoints.csv` on the SD card. The animation sequence lives in `/animation.csv` and only contains a `[sequence]` section. The animation file defines a single looping animation with a maximum duration of 5 minutes (300000 ms).
 
 Endpoint config schema (CSV columns, in order):
 1. `endpoint_id` - 1-based endpoint index.
-2. `serial_port` - Serial port number (1-8).
-3. `address` - RoboClaw address (hex allowed, e.g. `0x80`).
-4. `motor` - Motor channel on the RoboClaw: `1` or `2`.
-5. `enabled` - `1` or `0`.
-6. `max_velocity` - Absolute max velocity (counts/sec).
-7. `max_accel` - Absolute max accel (counts/sec^2).
+2. `type` - `ROBOCLAW`, `MKS_SERVO`, `REV_FRC_CAN`, `JOE_SERVO_SERIAL`, or `JOE_SERVO_CAN`.
+3. `address` - Device address or CAN ID (hex allowed, e.g. `0x80`).
+4. `enabled` - `1` or `0`.
+5. `position_min` - Minimum allowed position.
+6. `position_max` - Maximum allowed position.
+7. `velocity_min` - Minimum allowed velocity.
+8. `velocity_max` - Maximum allowed velocity.
+9. `accel_min` - Minimum allowed acceleration.
+10. `accel_max` - Maximum allowed acceleration.
+11. `serial_port` - Interface index (1=CAN on pins 0/1, 2-8=RS422 serial ports).
+12. `motor` - RoboClaw motor channel (`1` or `2`), `0` when unused.
 
 Sequence schema (CSV columns, in order):
 1. `time_ms` - Integer milliseconds from 0 to 300000.
 2. `endpoint_id` - 1-based endpoint index.
-3. `position` - Target position in encoder counts.
-4. `velocity` - Max velocity in encoder counts per second.
-5. `accel` - Max acceleration in encoder counts per second squared.
+3. `position` - Target position.
+4. `velocity` - Target velocity.
+5. `accel` - Target acceleration.
 6. `mode` (optional) - `pos` (default) or `vel` to issue a velocity-only command.
 
 Example:
 ```
-[endpoints]
-# endpoint_id,serial_port,address,motor,enabled,max_velocity,max_accel
-1,1,0x80,1,1,50000,50000
-2,1,0x80,2,1,50000,50000
+# endpoints.csv
+# endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor
+1,MKS_SERVO,0x00000001,1,-1000,1000,0,1000,0,1000,1,0
+2,ROBOCLAW,0x00000080,1,-1000,1000,0,1000,0,1000,2,1
 
+# animation.csv
 [sequence]
 # time_ms,endpoint_id,position,velocity,accel,mode
-0,1,0,0,0
-0,2,0,0,0
-500,1,1200,2000,1000
-500,2,800,2000,1000
-1000,1,0,1500,500,vel
+0,1,0,800,250,pos
+2000,1,1000,800,250,pos
 ```
 
 Notes:
 - Lines starting with `#` are comments and ignored.
 - The animation loops at the largest `time_ms` found, capped at 300000 ms.
 - `velocity` and `accel` are required on every row for consistency.
-- If the `[endpoints]` section is missing, the controller falls back to `/endpoints.csv` or EEPROM defaults.
-- `max_velocity` and `max_accel` define absolute limits used to scale normalized UI inputs (0-100%).
-- When `mode=vel`, the `position` field is ignored.
+- Serial1 (pins 0/1) is reserved for the CAN transceiver and is not available for RS422 endpoints.
+- The CAN bus is initialized at 500 kbps.
+- Default SD card files live in `Software/Animation_Control_Station/sd_defaults`.
 
 
 ### Hardware - Overall System

@@ -65,10 +65,15 @@ void EncoderJog::isrB() { isrA(); }
  */
 int32_t EncoderJog::consumeDelta() {
   static int32_t lastReadPosition = 0;
+  static int32_t tickRemainder = 0;
   noInterrupts();
   int32_t position = _position;
   interrupts();
   int32_t delta = position - lastReadPosition;
   lastReadPosition = position;
-  return delta;
+  tickRemainder += delta;
+  const int32_t ticksPerDetent = 4;
+  const int32_t detents = tickRemainder / ticksPerDetent;
+  tickRemainder -= detents * ticksPerDetent;
+  return detents;
 }

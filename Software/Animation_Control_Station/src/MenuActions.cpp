@@ -9,6 +9,10 @@ void MenuActionResetConfig(App &app) {
   app.actionResetConfig();
 }
 
+void MenuActionEditSequence(App &app) {
+  app.actionOpenEdit();
+}
+
 void MenuActionSdTest(App &app) {
   app.actionSdTest();
 }

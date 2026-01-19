@@ -4,6 +4,11 @@
 	(generator_version "9.0")
 	(uuid "c84f91d4-6195-4b4d-8e59-86c9303f56a9")
 	(paper "A4")
+	(title_block
+		(title "Robotic Animation Controller")
+		(date "2026-01-09")
+		(rev "V1")
+	)
 	(lib_symbols
 		(symbol "Connector:TestPoint"
 			(pin_numbers

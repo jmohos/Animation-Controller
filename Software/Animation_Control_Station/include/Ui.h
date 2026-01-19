@@ -49,15 +49,24 @@ struct UiModel {
   bool sequenceLoaded = false;
   uint16_t sequenceCount = 0;
   uint32_t sequenceLoopMs = 0;
+  bool editHasEvent = false;
+  uint16_t editEventOrdinal = 0;
+  uint16_t editEventCount = 0;
+  uint32_t editTimeMs = 0;
+  int32_t editPosition = 0;
+  uint32_t editVelocity = 0;
+  uint32_t editAccel = 0;
+  uint8_t editField = 0;
   bool endpointEnabled[MAX_ENDPOINTS] = {};
   bool endpointStatusValid[MAX_ENDPOINTS] = {};
   bool endpointEncValid[MAX_ENDPOINTS] = {};
   bool endpointSpeedValid[MAX_ENDPOINTS] = {};
   int32_t endpointPos[MAX_ENDPOINTS] = {};
   int32_t endpointSpeed[MAX_ENDPOINTS] = {};
+  EndpointType endpointConfigType[MAX_ENDPOINTS] = {};
   uint8_t endpointConfigPort[MAX_ENDPOINTS] = {};
   uint8_t endpointConfigMotor[MAX_ENDPOINTS] = {};
-  uint8_t endpointConfigAddress[MAX_ENDPOINTS] = {};
+  uint32_t endpointConfigAddress[MAX_ENDPOINTS] = {};
   EndpointConfig endpointConfigSelected = {};
   bool rcPortEnabled[MAX_RC_PORTS] = {};
   uint8_t rcPortAddress[MAX_RC_PORTS] = {};
@@ -76,11 +85,16 @@ using UiScreen = UiModel::Screen;
 
 enum class EndpointField : uint8_t {
   Enabled,
+  Type,
+  Address,
   SerialPort,
   Motor,
-  Address,
-  MaxVelocity,
-  MaxAccel,
+  PositionMin,
+  PositionMax,
+  VelocityMin,
+  VelocityMax,
+  AccelMin,
+  AccelMax,
   Count
 };
 

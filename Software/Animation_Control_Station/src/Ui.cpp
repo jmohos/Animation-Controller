@@ -91,13 +91,17 @@ static void drawEndpointConfigList(const UiModel &model) {
     const char cursor = (i == model.endpointConfigIndex) ? '>' : ' ';
     const uint8_t epNum = static_cast<uint8_t>(i + 1);
     const bool enabled = model.endpointEnabled[i];
-    canvas->printf("%c%02u %s S%u M%u A%02X",
+    canvas->printf("%c%02u %s %s A%08lX",
                    cursor,
                    epNum,
                    enabled ? "EN " : "DIS",
-                   (unsigned)model.endpointConfigPort[i],
-                   (unsigned)model.endpointConfigMotor[i],
-                   (unsigned)model.endpointConfigAddress[i]);
+                   endpointTypeShortName(model.endpointConfigType[i]),
+                   (unsigned long)model.endpointConfigAddress[i]);
+    if (model.endpointConfigType[i] == EndpointType::RoboClaw) {
+      canvas->printf(" S%u M%u",
+                     (unsigned)model.endpointConfigPort[i],
+                     (unsigned)model.endpointConfigMotor[i]);
+    }
   }
   canvas->setTextSize(2);
 }
@@ -110,31 +114,55 @@ static void drawEndpointConfigEdit(const UiModel &model) {
 
   const uint16_t startY = 72;
   const uint8_t lineHeight = 16;
+  const uint8_t fieldsPerPage = 6;
+  const uint8_t fieldStart = static_cast<uint8_t>((model.endpointConfigField / fieldsPerPage) * fieldsPerPage);
 
-  canvas->setCursor(0, startY + (0 * lineHeight));
-  canvas->printf("%c ENABLE: %s",
-                 (model.endpointConfigField == 0) ? '>' : ' ',
-                 ep.enabled ? "ON" : "OFF");
-  canvas->setCursor(0, startY + (1 * lineHeight));
-  canvas->printf("%c SERIAL: %u",
-                 (model.endpointConfigField == 1) ? '>' : ' ',
-                 (unsigned)ep.serialPort);
-  canvas->setCursor(0, startY + (2 * lineHeight));
-  canvas->printf("%c MOTOR:  %u",
-                 (model.endpointConfigField == 2) ? '>' : ' ',
-                 (unsigned)ep.motor);
-  canvas->setCursor(0, startY + (3 * lineHeight));
-  canvas->printf("%c ADDR:   0x%02X",
-                 (model.endpointConfigField == 3) ? '>' : ' ',
-                 (unsigned)ep.address);
-  canvas->setCursor(0, startY + (4 * lineHeight));
-  canvas->printf("%c VMAX:   %lu",
-                 (model.endpointConfigField == 4) ? '>' : ' ',
-                 (unsigned long)ep.maxVelocity);
-  canvas->setCursor(0, startY + (5 * lineHeight));
-  canvas->printf("%c AMAX:   %lu",
-                 (model.endpointConfigField == 5) ? '>' : ' ',
-                 (unsigned long)ep.maxAccel);
+  for (uint8_t i = 0; i < fieldsPerPage; i++) {
+    const uint8_t field = static_cast<uint8_t>(fieldStart + i);
+    if (field >= ENDPOINT_FIELD_COUNT) {
+      break;
+    }
+    const uint16_t y = startY + static_cast<uint16_t>(i * lineHeight);
+    canvas->setCursor(0, y);
+    const char cursor = (model.endpointConfigField == field) ? '>' : ' ';
+    switch (static_cast<EndpointField>(field)) {
+      case EndpointField::Enabled:
+        canvas->printf("%c ENABLE: %s", cursor, ep.enabled ? "ON" : "OFF");
+        break;
+      case EndpointField::Type:
+        canvas->printf("%c TYPE:   %s", cursor, endpointTypeName(ep.type));
+        break;
+      case EndpointField::Address:
+        canvas->printf("%c ADDR:   0x%08lX", cursor, (unsigned long)ep.address);
+        break;
+      case EndpointField::SerialPort:
+        canvas->printf("%c SERIAL: %u", cursor, (unsigned)ep.serialPort);
+        break;
+      case EndpointField::Motor:
+        canvas->printf("%c MOTOR:  %u", cursor, (unsigned)ep.motor);
+        break;
+      case EndpointField::PositionMin:
+        canvas->printf("%c PMIN:   %ld", cursor, (long)ep.positionMin);
+        break;
+      case EndpointField::PositionMax:
+        canvas->printf("%c PMAX:   %ld", cursor, (long)ep.positionMax);
+        break;
+      case EndpointField::VelocityMin:
+        canvas->printf("%c VMIN:   %lu", cursor, (unsigned long)ep.velocityMin);
+        break;
+      case EndpointField::VelocityMax:
+        canvas->printf("%c VMAX:   %lu", cursor, (unsigned long)ep.velocityMax);
+        break;
+      case EndpointField::AccelMin:
+        canvas->printf("%c AMIN:   %lu", cursor, (unsigned long)ep.accelMin);
+        break;
+      case EndpointField::AccelMax:
+        canvas->printf("%c AMAX:   %lu", cursor, (unsigned long)ep.accelMax);
+        break;
+      default:
+        break;
+    }
+  }
 
   canvas->setTextSize(1);
   canvas->setCursor(0, 210);
@@ -187,6 +215,61 @@ static void drawRoboClawStatusList(const UiModel &model) {
     canvas->setCursor(0, startY);
     canvas->printf("NO ENABLED ROBOCLAWS");
   }
+  canvas->setTextSize(2);
+}
+
+static void drawSequenceProgressBar(const UiModel &model) {
+  if (!model.sequenceLoaded || model.sequenceLoopMs == 0) {
+    return;
+  }
+  const uint16_t barX = 10;
+  const uint16_t barY = 190;
+  const uint16_t barW = 300;
+  const uint16_t barH = 10;
+  uint32_t progress = model.showTimeMs;
+  if (progress > model.sequenceLoopMs) {
+    progress = model.sequenceLoopMs;
+  }
+  const uint16_t fillW = static_cast<uint16_t>(
+    (static_cast<uint64_t>(progress) * barW) / model.sequenceLoopMs
+  );
+
+  canvas->drawRect(barX, barY, barW, barH, ILI9341_T4_COLOR_WHITE);
+  if (fillW > 0) {
+    canvas->fillRect(barX + 1, barY + 1, fillW - 1, barH - 2, ILI9341_T4_COLOR_GREEN);
+  }
+}
+
+static void drawEditScreen(const UiModel &model) {
+  canvas->printf("EDIT EP %u\n", (unsigned)(model.selectedMotor + 1));
+  if (!model.editHasEvent) {
+    canvas->printf("NO EVENTS\n");
+    canvas->setTextSize(1);
+    canvas->setCursor(0, 120);
+    canvas->printf("YEL=ADD  GRN=EP");
+    canvas->setTextSize(2);
+    return;
+  }
+
+  canvas->printf("STEP %u/%u\n",
+                 (unsigned)model.editEventOrdinal,
+                 (unsigned)model.editEventCount);
+  canvas->setTextSize(1);
+  canvas->setCursor(0, 96);
+  canvas->printf("%c TIME: %lu ms\n",
+                 (model.editField == 0) ? '>' : ' ',
+                 (unsigned long)model.editTimeMs);
+  canvas->printf("%c POS:  %ld\n",
+                 (model.editField == 1) ? '>' : ' ',
+                 (long)model.editPosition);
+  canvas->printf("%c VEL:  %lu\n",
+                 (model.editField == 2) ? '>' : ' ',
+                 (unsigned long)model.editVelocity);
+  canvas->printf("%c ACC:  %lu\n",
+                 (model.editField == 3) ? '>' : ' ',
+                 (unsigned long)model.editAccel);
+  canvas->setCursor(0, 200);
+  canvas->printf("UP/DN=STEP OK=FIELD ENC=ADJ");
   canvas->setTextSize(2);
 }
 
@@ -312,8 +395,8 @@ void Ui::render(const UiModel& model) {
       snprintf(hintGreen, sizeof(hintGreen), "EP %u", (unsigned)(model.selectedMotor + 1));
       break;
     case UiModel::Screen::Edit:
-      hintRed = "MARK";
-      hintYellow = "TIME";
+      hintRed = "DEL";
+      hintYellow = "ADD";
       snprintf(hintGreen, sizeof(hintGreen), "EP %u", (unsigned)(model.selectedMotor + 1));
       break;
     default:
@@ -389,6 +472,7 @@ void Ui::render(const UiModel& model) {
       if (model.sequenceLoaded) {
         canvas->printf("LOOP: %lu ms\n", (unsigned long)model.sequenceLoopMs);
       }
+      drawSequenceProgressBar(model);
       break;
     case UiModel::Screen::Menu: {
       drawMenuList("MENU", MENU_ITEMS, MENU_ITEM_COUNT, model.menuIndex);
@@ -432,7 +516,8 @@ void Ui::render(const UiModel& model) {
       }
       break;
     case UiModel::Screen::Edit:
-      canvas->printf("EDIT (TBD)\n");
+      canvas->setCursor(0, 48);
+      drawEditScreen(model);
       break;
     default:
       break;

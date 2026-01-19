@@ -8,7 +8,7 @@
  */
 static HardwareSerial* pickSerialForIndex(uint8_t portIndex) {
   switch (portIndex) {
-    case 0: return &Serial1;
+    case 0: return nullptr;
     case 1: return &Serial2;
     case 2: return &Serial3;
     case 3: return &Serial4;
@@ -29,6 +29,8 @@ static HardwareSerial* pickSerialForIndex(uint8_t portIndex) {
 void Rs422Ports::begin(unsigned long baud) {
   for (uint8_t i = 0; i < 8; i++) {
     _ports[i].serial = pickSerialForIndex(i);
-    _ports[i].serial->begin(baud);
+    if (_ports[i].serial) {
+      _ports[i].serial->begin(baud);
+    }
   }
 }
