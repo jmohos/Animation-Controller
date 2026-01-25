@@ -30,7 +30,7 @@ public:
   /**
    * Description: Read encoder and error status from a RoboClaw.
    * Inputs:
-   * - portIndex: RS422 port index [0..7].
+   * - portIndex: RS422 port index [0..6].
    * - address: RoboClaw address.
    * - status: output status structure.
    * Outputs: Returns true when any status field is valid.
@@ -40,7 +40,7 @@ public:
   /**
    * Description: Command position with accel and velocity.
    * Inputs:
-   * - portIndex: RS422 port index [0..7].
+   * - portIndex: RS422 port index [0..6].
    * - address: RoboClaw address.
    * - motor: motor index (1=M1, 2=M2).
    * - position: target position (encoder counts).
@@ -53,7 +53,7 @@ public:
   /**
    * Description: Command velocity with accel.
    * Inputs:
-   * - portIndex: RS422 port index [0..7].
+   * - portIndex: RS422 port index [0..6].
    * - address: RoboClaw address.
    * - motor: motor index (1=M1, 2=M2).
    * - velocity: max velocity (counts/sec).
@@ -63,7 +63,7 @@ public:
   bool commandVelocity(uint8_t portIndex, uint8_t address, uint8_t motor, uint32_t velocity, uint32_t accel);
 
 private:
-  static constexpr uint8_t kMaxPorts = 8;
+  static constexpr uint8_t kMaxPorts = RS422_PORT_COUNT;
   RoboClaw* _claws[kMaxPorts] = {};
   alignas(RoboClaw) uint8_t _storage[kMaxPorts][sizeof(RoboClaw)] = {};
 };

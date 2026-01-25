@@ -19,11 +19,11 @@ public:
   /**
    * Description: Access a specific RS422 port by index.
    * Inputs:
-   * - portIndex: port index [0..7].
+   * - portIndex: port index [0..6].
    * Outputs: Returns a reference to the port entry.
    */
   Rs422Port& port(uint8_t portIndex) { return _ports[portIndex]; }
 
 private:
-  Rs422Port _ports[8];
+  Rs422Port _ports[RS422_PORT_COUNT];
 };

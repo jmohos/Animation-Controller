@@ -50,7 +50,7 @@ Endpoint config schema (CSV columns, in order):
 8. `velocity_max` - Maximum allowed velocity.
 9. `accel_min` - Minimum allowed acceleration.
 10. `accel_max` - Maximum allowed acceleration.
-11. `serial_port` - Interface index (1=CAN on pins 0/1, 2-8=RS422 serial ports).
+11. `serial_port` - Interface index (0=CAN on pins 0/1, 1-7=RS422 serial ports).
 12. `motor` - RoboClaw motor channel (`1` or `2`), `0` when unused.
 
 Sequence schema (CSV columns, in order):
@@ -65,8 +65,8 @@ Example:
 ```
 # endpoints.csv
 # endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor
-1,MKS_SERVO,0x00000001,1,-1000,1000,0,1000,0,1000,1,0
-2,ROBOCLAW,0x00000080,1,-1000,1000,0,1000,0,1000,2,1
+1,MKS_SERVO,0x00000001,1,-1000,1000,0,1000,0,1000,0,0
+2,ROBOCLAW,0x00000080,1,-1000,1000,0,1000,0,1000,1,1
 
 # animation.csv
 [sequence]
@@ -106,7 +106,7 @@ The animation controller assembly consists of the following:
 * A set of three context sensitive buttons with LED backlights.  These buttons are located below the display to align with a set of hot-key displays at the bottom of the screen guiding you on what the three buttons currently do when pressed.  The buttons are Red (left), Yellow (center), and Green (right).
 * The backlights for the Red, Yellow and Green buttons are controlled by the SX1509 IO expander outputs.  The output of the SX1509 outputs 8-15 are wired to an ULN2803 driver chip that switches 12V selectively to the LED outputs.
 * The LED outputs can be commanded to be off, on or blink with a selectable on and off time to create unique patterns.
-* The 8 hardware serial ports of the Teensy 4.1 are wired to a set of 8 connectors with VCC, Ground, RX and TX each.  These connectors mate with a set of 8 RS422, full-duplex serial converters that wire to each of the 8 remote actuator stations.
+* The Teensy 4.1 serial ports 2-8 are wired to a set of 7 connectors with VCC, Ground, RX and TX each.  These connectors mate with a set of 7 RS422, full-duplex serial converters that wire to each of the 7 remote actuator stations.
 * An SD card slot on the Teensy 4.1 will be used for storage of the animation sequences.
 * The Teensy 4.1 FLASH EEPROM will be used to store configuration settings like the number animation endpoints, their modes and their enables.
 * The animation controller shall operate in a series of operating states that can include:

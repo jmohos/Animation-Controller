@@ -1,5 +1,5 @@
 #include "SequencePlayer.h"
-#include <cstring>
+#include "BoardPins.h"
 #include <cstdlib>
 #include <ctype.h>
 
@@ -175,7 +175,7 @@ static bool resolveEndpoint(const AppConfig &config, uint8_t endpointIndex, cons
   if (candidate.type != EndpointType::RoboClaw) {
     return false;
   }
-  if (candidate.serialPort < 2 || candidate.serialPort > 8) {
+  if (candidate.serialPort < 1 || candidate.serialPort > RS422_PORT_COUNT) {
     return false;
   }
   if (candidate.motor < 1 || candidate.motor > 2) {
@@ -195,15 +195,90 @@ static bool isCanEndpointType(EndpointType type) {
           type == EndpointType::JoeServoCan);
 }
 
-static void packCanMotionFrame(int32_t position, uint32_t velocity, uint32_t accel, uint8_t data[8]) {
-  // Generic 8-byte motion frame: int32 position, uint16 velocity, uint16 accel (little-endian).
-  const uint16_t vel16 = (velocity > 0xFFFFu) ? 0xFFFFu : static_cast<uint16_t>(velocity);
-  const uint16_t acc16 = (accel > 0xFFFFu) ? 0xFFFFu : static_cast<uint16_t>(accel);
-  std::memcpy(&data[0], &position, sizeof(position));
-  data[4] = static_cast<uint8_t>(vel16 & 0xFF);
-  data[5] = static_cast<uint8_t>((vel16 >> 8) & 0xFF);
-  data[6] = static_cast<uint8_t>(acc16 & 0xFF);
-  data[7] = static_cast<uint8_t>((acc16 >> 8) & 0xFF);
+static uint8_t mksServoChecksum(uint16_t canId, const uint8_t *data, uint8_t len) {
+  // MKS CAN checksum: sum of CAN ID (low byte) + data bytes, truncated to 8 bits.
+  uint32_t sum = static_cast<uint8_t>(canId & 0xFFu);
+  for (uint8_t i = 0; i < len; i++) {
+    sum += data[i];
+  }
+  return static_cast<uint8_t>(sum & 0xFFu);
+}
+
+static uint32_t encodeMksServoInt24(int32_t value) {
+  const int32_t maxPos = 0x7FFFFF;
+  if (value > maxPos) {
+    value = maxPos;
+  } else if (value < -maxPos) {
+    value = -maxPos;
+  }
+  if (value < 0) {
+    return static_cast<uint32_t>((1u << 24) + value);
+  }
+  return static_cast<uint32_t>(value);
+}
+
+static bool packMksServoPosition(uint16_t canId, uint16_t speed, uint8_t accel, int32_t position, uint8_t data[8]) {
+  uint32_t axis = encodeMksServoInt24(position);
+  data[0] = 0xF5;
+  data[1] = static_cast<uint8_t>((speed >> 8) & 0xFFu);
+  data[2] = static_cast<uint8_t>(speed & 0xFFu);
+  data[3] = accel;
+  data[4] = static_cast<uint8_t>((axis >> 16) & 0xFFu);
+  data[5] = static_cast<uint8_t>((axis >> 8) & 0xFFu);
+  data[6] = static_cast<uint8_t>(axis & 0xFFu);
+  data[7] = mksServoChecksum(canId, data, 7);
+  return true;
+}
+
+static bool packMksServoSpeed(uint16_t canId, uint16_t speed, uint8_t accel, bool reverse, uint8_t data[5]) {
+  const uint8_t dir = reverse ? 0x80u : 0x00u;
+  data[0] = 0xF6;
+  data[1] = static_cast<uint8_t>(dir | ((speed >> 8) & 0x0Fu));
+  data[2] = static_cast<uint8_t>(speed & 0xFFu);
+  data[3] = accel;
+  data[4] = mksServoChecksum(canId, data, 4);
+  return true;
+}
+
+static void dispatchMksServoEvent(const SequenceEvent &ev, CanBus &can, const EndpointConfig &endpoint) {
+  if (endpoint.address > 0x7FFu) {
+    return;
+  }
+  const uint16_t canId = static_cast<uint16_t>(endpoint.address);
+  uint32_t speedRaw = clampU32Range(ev.velocity, endpoint.velocityMin, endpoint.velocityMax);
+  if (speedRaw > 3000u) {
+    speedRaw = 3000u;
+  }
+  uint32_t accelRaw = clampU32Range(ev.accel, endpoint.accelMin, endpoint.accelMax);
+  if (accelRaw > 255u) {
+    accelRaw = 255u;
+  }
+  const uint16_t speed = static_cast<uint16_t>(speedRaw);
+  const uint8_t accel = static_cast<uint8_t>(accelRaw);
+
+  if (ev.mode == SequenceEvent::Mode::Velocity) {
+    const bool reverse = (ev.position < 0);
+    uint8_t data[5] = {};
+    if (packMksServoSpeed(canId, speed, accel, reverse, data)) {
+      can.send(canId, data, sizeof(data));
+    }
+  } else {
+    int32_t pos = clampI32Range(ev.position, endpoint.positionMin, endpoint.positionMax);
+    uint8_t data[8] = {};
+    if (packMksServoPosition(canId, speed, accel, pos, data)) {
+      can.send(canId, data, sizeof(data));
+    }
+  }
+}
+
+static void dispatchCanEvent(const SequenceEvent &ev, CanBus &can, const EndpointConfig &endpoint) {
+  switch (endpoint.type) {
+    case EndpointType::MksServo:
+      dispatchMksServoEvent(ev, can, endpoint);
+      break;
+    default:
+      break;
+  }
 }
 
 static void dispatchEvent(const SequenceEvent &ev, RoboClawBus &roboclaw, CanBus &can, const AppConfig &config) {
@@ -230,15 +305,7 @@ static void dispatchEvent(const SequenceEvent &ev, RoboClawBus &roboclaw, CanBus
       }
     }
   } else if (isCanEndpointType(endpoint.type)) {
-    uint32_t vel = clampU32Range(ev.velocity, endpoint.velocityMin, endpoint.velocityMax);
-    uint32_t acc = clampU32Range(ev.accel, endpoint.accelMin, endpoint.accelMax);
-    int32_t pos = 0;
-    if (ev.mode == SequenceEvent::Mode::Position) {
-      pos = clampI32Range(ev.position, endpoint.positionMin, endpoint.positionMax);
-    }
-    uint8_t data[8] = {};
-    packCanMotionFrame(pos, vel, acc, data);
-    can.send(endpoint.address, data, sizeof(data));
+    dispatchCanEvent(ev, can, endpoint);
   }
 }
 

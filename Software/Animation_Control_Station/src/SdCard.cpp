@@ -1,5 +1,6 @@
 #include "SdCard.h"
 #include "ConfigStore.h"
+#include "BoardPins.h"
 #include <cstring>
 #include <cstdlib>
 #include <ctype.h>
@@ -160,15 +161,24 @@ bool SdCardManager::loadEndpointConfig(AppConfig &cfg, Stream &out) {
     const bool usesCan = (type == EndpointType::MksServo ||
                           type == EndpointType::RevFrcCan ||
                           type == EndpointType::JoeServoCan);
-    if (!usesCan && enabled != 0) {
-      if (port < 2 || port > 8) {
-        out.printf("CFG: serial port must be 2-8: %s\n", line);
+    if (usesCan && enabled != 0) {
+      if (port != 0) {
+        out.printf("CFG: CAN port must be 0: %s\n", line);
+        continue;
+      }
+      if (type == EndpointType::MksServo && address > 0x7FFu) {
+        out.printf("CFG: MKS CAN ID must be 0-0x7FF: %s\n", line);
+        continue;
+      }
+    } else if (enabled != 0) {
+      if (port < 1 || port > RS422_PORT_COUNT) {
+        out.printf("CFG: serial port must be 1-%u: %s\n", (unsigned)RS422_PORT_COUNT, line);
         continue;
       }
     }
     if (type == EndpointType::RoboClaw && enabled != 0) {
-      if (port < 2 || port > 8) {
-        out.printf("CFG: RoboClaw port must be 2-8: %s\n", line);
+      if (port < 1 || port > RS422_PORT_COUNT) {
+        out.printf("CFG: RoboClaw port must be 1-%u: %s\n", (unsigned)RS422_PORT_COUNT, line);
         continue;
       }
       if (motor < 1 || motor > 2) {
@@ -187,7 +197,7 @@ bool SdCardManager::loadEndpointConfig(AppConfig &cfg, Stream &out) {
     ep.velocityMax = velMax;
     ep.accelMin = accMin;
     ep.accelMax = accMax;
-    ep.serialPort = (port <= 8) ? static_cast<uint8_t>(port) : ep.serialPort;
+    ep.serialPort = (port <= RS422_PORT_COUNT) ? static_cast<uint8_t>(port) : ep.serialPort;
     ep.motor = (motor <= 2) ? static_cast<uint8_t>(motor) : ep.motor;
   }
 

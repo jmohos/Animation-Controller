@@ -15,8 +15,8 @@ App g_app;
 static constexpr uint32_t kMaxVelocityCountsPerSec = 50000;
 static constexpr uint32_t kMaxAccelCountsPerSec2 = 50000;
 static constexpr uint32_t kCanBitrate = 500000;
-static constexpr uint8_t kEndpointPortMin = 1;
-static constexpr uint8_t kEndpointPortMax = 8;
+static constexpr uint8_t kEndpointPortMin = 0;
+static constexpr uint8_t kEndpointPortMax = RS422_PORT_COUNT;
 static constexpr uint8_t kEndpointMotorMin = 1;
 static constexpr uint8_t kEndpointMotorMax = 2;
 static constexpr uint32_t kEndpointAddressMin = 0;
@@ -214,7 +214,7 @@ static bool resolveEndpoint(const AppConfig &config, uint8_t endpointIndex, cons
   if (candidate.type != EndpointType::RoboClaw) {
     return false;
   }
-  if (candidate.serialPort < 2 || candidate.serialPort > 8) {
+  if (candidate.serialPort < 1 || candidate.serialPort > MAX_RC_PORTS) {
     return false;
   }
   if (candidate.motor < 1 || candidate.motor > 2) {
@@ -234,6 +234,66 @@ static bool usesCanBus(EndpointType type) {
           type == EndpointType::JoeServoCan);
 }
 
+static uint8_t mksServoChecksum(uint16_t canId, const uint8_t *data, uint8_t len) {
+  uint32_t sum = static_cast<uint8_t>(canId & 0xFFu);
+  for (uint8_t i = 0; i < len; i++) {
+    sum += data[i];
+  }
+  return static_cast<uint8_t>(sum & 0xFFu);
+}
+
+static uint32_t encodeMksServoInt24(int32_t value) {
+  const int32_t maxPos = 0x7FFFFF;
+  if (value > maxPos) {
+    value = maxPos;
+  } else if (value < -maxPos) {
+    value = -maxPos;
+  }
+  if (value < 0) {
+    return static_cast<uint32_t>((1u << 24) + value);
+  }
+  return static_cast<uint32_t>(value);
+}
+
+static bool sendMksServoPosition(CanBus &can, const EndpointConfig &endpoint, int32_t position,
+                                 uint32_t velocity, uint32_t accel) {
+  if (endpoint.address > 0x7FFu) {
+    return false;
+  }
+  uint32_t speed = clampU32Range(velocity, endpoint.velocityMin, endpoint.velocityMax);
+  if (speed > 3000u) {
+    speed = 3000u;
+  }
+  uint32_t acc = clampU32Range(accel, endpoint.accelMin, endpoint.accelMax);
+  if (acc > 255u) {
+    acc = 255u;
+  }
+  const int32_t pos = clampI32Range(position, endpoint.positionMin, endpoint.positionMax);
+  const uint16_t canId = static_cast<uint16_t>(endpoint.address);
+  const uint32_t axis = encodeMksServoInt24(pos);
+
+  uint8_t data[8] = {};
+  data[0] = 0xF5;
+  data[1] = static_cast<uint8_t>((speed >> 8) & 0xFFu);
+  data[2] = static_cast<uint8_t>(speed & 0xFFu);
+  data[3] = static_cast<uint8_t>(acc & 0xFFu);
+  data[4] = static_cast<uint8_t>((axis >> 16) & 0xFFu);
+  data[5] = static_cast<uint8_t>((axis >> 8) & 0xFFu);
+  data[6] = static_cast<uint8_t>(axis & 0xFFu);
+  data[7] = mksServoChecksum(canId, data, 7);
+  Serial.printf("CAN TX ID: 0x%03X DATA: ", canId);
+  for (int i = 0; i < 8; i++) {
+    Serial.printf("%02X", data[i]);
+    if (i < 7) {
+      Serial.print(' ');
+    }
+  }
+  Serial.print('\n');
+  Serial.flush();
+  delay(5);
+  return can.send(canId, data, sizeof(data));
+}
+
 static void printEndpointConfig(Stream &out, uint8_t endpointIndex, const EndpointConfig &ep) {
   out.printf("EP%u: type=%s addr=0x%08lX %s pos=[%ld..%ld] vel=[%lu..%lu] acc=[%lu..%lu]",
              (unsigned)(endpointIndex + 1),
@@ -248,6 +308,8 @@ static void printEndpointConfig(Stream &out, uint8_t endpointIndex, const Endpoi
              (unsigned long)ep.accelMax);
   if (ep.type == EndpointType::RoboClaw) {
     out.printf(" port=%u motor=%u", (unsigned)ep.serialPort, (unsigned)ep.motor);
+  } else if (usesCanBus(ep.type)) {
+    out.printf(" iface=CAN");
   } else {
     out.printf(" iface=%u", (unsigned)ep.serialPort);
   }
@@ -598,19 +660,52 @@ void App::loop() {
       _model.selectedMotor++;
     }
     if (buttonState.justPressed(Button::BUTTON_GREEN)) {
-      const EndpointConfig *ep = nullptr;
-      uint8_t portIndex = 0;
-      if (resolveEndpoint(_config, _model.selectedMotor, ep, portIndex)) {
-        uint32_t maxVel = ep->velocityMax;
-        uint32_t minVel = ep->velocityMin;
+      const EndpointConfig &endpoint = _config.endpoints[_model.selectedMotor];
+      if (!endpoint.enabled) {
+        setStatusLine("MOVE EP DIS");
+      } else if (endpoint.type == EndpointType::RoboClaw) {
+        const EndpointConfig *ep = nullptr;
+        uint8_t portIndex = 0;
+        if (resolveEndpoint(_config, _model.selectedMotor, ep, portIndex)) {
+          uint32_t maxVel = ep->velocityMax;
+          uint32_t minVel = ep->velocityMin;
+          if (maxVel == 0 && minVel == 0) {
+            maxVel = kMaxVelocityCountsPerSec;
+          }
+          if (maxVel < minVel) {
+            maxVel = minVel;
+          }
+          uint32_t maxAcc = ep->accelMax;
+          uint32_t minAcc = ep->accelMin;
+          if (maxAcc == 0 && minAcc == 0) {
+            maxAcc = kMaxAccelCountsPerSec2;
+          }
+          if (maxAcc < minAcc) {
+            maxAcc = minAcc;
+          }
+          const uint32_t velocity = minVel + static_cast<uint32_t>(_model.speedNorm * (maxVel - minVel));
+          const uint32_t accel = minAcc + static_cast<uint32_t>(_model.accelNorm * (maxAcc - minAcc));
+          int32_t pos = _model.jogPos;
+          if (ep->positionMax > ep->positionMin) {
+            pos = clampI32(pos, ep->positionMin, ep->positionMax);
+          }
+          uint32_t position = static_cast<uint32_t>(pos);
+          const bool ok = _roboclaw.commandPosition(portIndex, static_cast<uint8_t>(ep->address), ep->motor, position, velocity, accel);
+          setStatusLine("MOVE %s", ok ? "OK" : "FAIL");
+        } else {
+          setStatusLine("MOVE EP ERR");
+        }
+      } else if (usesCanBus(endpoint.type)) {
+        uint32_t maxVel = endpoint.velocityMax;
+        uint32_t minVel = endpoint.velocityMin;
         if (maxVel == 0 && minVel == 0) {
           maxVel = kMaxVelocityCountsPerSec;
         }
         if (maxVel < minVel) {
           maxVel = minVel;
         }
-        uint32_t maxAcc = ep->accelMax;
-        uint32_t minAcc = ep->accelMin;
+        uint32_t maxAcc = endpoint.accelMax;
+        uint32_t minAcc = endpoint.accelMin;
         if (maxAcc == 0 && minAcc == 0) {
           maxAcc = kMaxAccelCountsPerSec2;
         }
@@ -619,12 +714,9 @@ void App::loop() {
         }
         const uint32_t velocity = minVel + static_cast<uint32_t>(_model.speedNorm * (maxVel - minVel));
         const uint32_t accel = minAcc + static_cast<uint32_t>(_model.accelNorm * (maxAcc - minAcc));
-        int32_t pos = _model.jogPos;
-        if (ep->positionMax > ep->positionMin) {
-          pos = clampI32(pos, ep->positionMin, ep->positionMax);
-        }
-        uint32_t position = static_cast<uint32_t>(pos);
-        const bool ok = _roboclaw.commandPosition(portIndex, static_cast<uint8_t>(ep->address), ep->motor, position, velocity, accel);
+        const bool ok = (endpoint.type == EndpointType::MksServo) ?
+                        sendMksServoPosition(_can, endpoint, _model.jogPos, velocity, accel) :
+                        false;
         setStatusLine("MOVE %s", ok ? "OK" : "FAIL");
       } else {
         setStatusLine("MOVE EP ERR");
@@ -695,6 +787,10 @@ void App::loop() {
     _sequence.update(nowMs, _roboclaw, _can, _config);
   }
 
+  _can.events();
+  _can.dumpRxLog(Serial);
+  _can.logErrorCounters(Serial, millis());
+  
   pollRoboClaws();
 
   const EndpointConfig *selectedEp = nullptr;
@@ -801,7 +897,7 @@ void App::loop() {
     if (ep.type != EndpointType::RoboClaw || ep.address > 0xFF) {
       continue;
     }
-    if (ep.serialPort < 2 || ep.serialPort > MAX_RC_PORTS) {
+    if (ep.serialPort < 1 || ep.serialPort > MAX_RC_PORTS) {
       continue;
     }
     const uint8_t portIndex = static_cast<uint8_t>(ep.serialPort - 1);
@@ -1038,11 +1134,18 @@ void App::adjustEndpointField(int32_t delta) {
     return;
   }
   EndpointConfig &ep = _config.endpoints[_endpointConfigIndex];
+  bool changed = false;
   switch (static_cast<EndpointField>(_endpointConfigField)) {
     case EndpointField::Enabled:
-      ep.enabled = (delta > 0) ? 1 : 0;
+      if (ep.enabled != ((delta > 0) ? 1 : 0)) {
+        ep.enabled = (delta > 0) ? 1 : 0;
+        changed = true;
+      }
       break;
     case EndpointField::Type: {
+      const EndpointType prevType = ep.type;
+      const uint8_t prevPort = ep.serialPort;
+      const uint8_t prevMotor = ep.motor;
       int32_t value = static_cast<int32_t>(ep.type) + delta;
       if (value < 0) {
         value = static_cast<int32_t>(EndpointType::JoeServoCan);
@@ -1051,71 +1154,107 @@ void App::adjustEndpointField(int32_t delta) {
       }
       ep.type = static_cast<EndpointType>(value);
       if (usesCanBus(ep.type)) {
-        ep.serialPort = 1;
+        ep.serialPort = 0;
         ep.motor = 0;
-      } else if (ep.serialPort < 2) {
-        ep.serialPort = 2;
+      } else if (ep.serialPort < 1) {
+        ep.serialPort = 1;
         if (ep.type == EndpointType::RoboClaw && ep.motor == 0) {
           ep.motor = 1;
         }
       }
+      changed = (ep.type != prevType || ep.serialPort != prevPort || ep.motor != prevMotor);
       break;
     }
     case EndpointField::Address: {
       const int64_t value = static_cast<int64_t>(ep.address) + delta;
-      ep.address = clampU32(value, kEndpointAddressMin, kEndpointAddressMax);
-      break;
-    }
-    case EndpointField::SerialPort: {
-      const int32_t value = static_cast<int32_t>(ep.serialPort) + delta;
-      ep.serialPort = clampU8(value, kEndpointPortMin, kEndpointPortMax);
-      if (usesCanBus(ep.type)) {
-        ep.serialPort = 1;
-      } else if (ep.serialPort < 2) {
-        ep.serialPort = 2;
+      const uint32_t next = clampU32(value, kEndpointAddressMin, kEndpointAddressMax);
+      if (next != ep.address) {
+        ep.address = next;
+        changed = true;
       }
       break;
     }
+    case EndpointField::SerialPort: {
+      const uint8_t prevPort = ep.serialPort;
+      const int32_t value = static_cast<int32_t>(ep.serialPort) + delta;
+      ep.serialPort = clampU8(value, kEndpointPortMin, kEndpointPortMax);
+      if (usesCanBus(ep.type)) {
+        ep.serialPort = 0;
+      } else if (ep.serialPort < 1) {
+        ep.serialPort = 1;
+      }
+      changed = (ep.serialPort != prevPort);
+      break;
+    }
     case EndpointField::Motor: {
+      const uint8_t prevMotor = ep.motor;
       const int32_t value = static_cast<int32_t>(ep.motor) + delta;
       ep.motor = clampU8(value, kEndpointMotorMin, kEndpointMotorMax);
       if (usesCanBus(ep.type)) {
         ep.motor = 0;
       }
+      changed = (ep.motor != prevMotor);
       break;
     }
     case EndpointField::PositionMin: {
       const int64_t value = static_cast<int64_t>(ep.positionMin) + (static_cast<int64_t>(delta) * kEndpointPositionStep);
-      ep.positionMin = clampI32(value, INT32_MIN, INT32_MAX);
+      const int32_t next = clampI32(value, INT32_MIN, INT32_MAX);
+      if (next != ep.positionMin) {
+        ep.positionMin = next;
+        changed = true;
+      }
       break;
     }
     case EndpointField::PositionMax: {
       const int64_t value = static_cast<int64_t>(ep.positionMax) + (static_cast<int64_t>(delta) * kEndpointPositionStep);
-      ep.positionMax = clampI32(value, INT32_MIN, INT32_MAX);
+      const int32_t next = clampI32(value, INT32_MIN, INT32_MAX);
+      if (next != ep.positionMax) {
+        ep.positionMax = next;
+        changed = true;
+      }
       break;
     }
     case EndpointField::VelocityMin: {
       const int64_t value = static_cast<int64_t>(ep.velocityMin) + (static_cast<int64_t>(delta) * kEndpointVelocityStep);
-      ep.velocityMin = clampU32(value, 0, kEndpointRateMax);
+      const uint32_t next = clampU32(value, 0, kEndpointRateMax);
+      if (next != ep.velocityMin) {
+        ep.velocityMin = next;
+        changed = true;
+      }
       break;
     }
     case EndpointField::VelocityMax: {
       const int64_t value = static_cast<int64_t>(ep.velocityMax) + (static_cast<int64_t>(delta) * kEndpointVelocityStep);
-      ep.velocityMax = clampU32(value, 0, kEndpointRateMax);
+      const uint32_t next = clampU32(value, 0, kEndpointRateMax);
+      if (next != ep.velocityMax) {
+        ep.velocityMax = next;
+        changed = true;
+      }
       break;
     }
     case EndpointField::AccelMin: {
       const int64_t value = static_cast<int64_t>(ep.accelMin) + (static_cast<int64_t>(delta) * kEndpointAccelStep);
-      ep.accelMin = clampU32(value, 0, kEndpointRateMax);
+      const uint32_t next = clampU32(value, 0, kEndpointRateMax);
+      if (next != ep.accelMin) {
+        ep.accelMin = next;
+        changed = true;
+      }
       break;
     }
     case EndpointField::AccelMax: {
       const int64_t value = static_cast<int64_t>(ep.accelMax) + (static_cast<int64_t>(delta) * kEndpointAccelStep);
-      ep.accelMax = clampU32(value, 0, kEndpointRateMax);
+      const uint32_t next = clampU32(value, 0, kEndpointRateMax);
+      if (next != ep.accelMax) {
+        ep.accelMax = next;
+        changed = true;
+      }
       break;
     }
     default:
       break;
+  }
+  if (changed) {
+    actionSaveConfig();
   }
 }
 
@@ -1154,6 +1293,8 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
     Serial.println("  factory reset");
     Serial.println("  ep list");
     Serial.println("  ep show <endpoint>");
+    Serial.println("  ep enable <endpoint>");
+    Serial.println("  ep disable <endpoint>");
     Serial.println("  ep set <endpoint> <field> <value>");
     Serial.println("  ep save");
     Serial.println("  seq load [path]");
@@ -1161,6 +1302,7 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
     Serial.println("  rc status <endpoint>");
     Serial.println("  rc pos <endpoint> <pos> <vel> <accel>");
     Serial.println("  rc vel <endpoint> <vel> <accel>");
+    Serial.println("  can status");
     Serial.println("  reboot");
     return;
   }
@@ -1254,7 +1396,7 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
 
   if (strcmp(msg.cmd, "ep") == 0 || strcmp(msg.cmd, "endpoint") == 0) {
     if (msg.argc == 0) {
-      statusMessage("ep list | ep show <endpoint> | ep set <endpoint> <field> <value> | ep save");
+      statusMessage("ep list | ep show <endpoint> | ep enable <endpoint> | ep disable <endpoint> | ep set <endpoint> <field> <value> | ep save");
       return;
     }
     const char *sub = msg.argv[0];
@@ -1277,6 +1419,23 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
       }
       const uint8_t endpointIndex = static_cast<uint8_t>(endpointId - 1);
       printEndpointConfig(Serial, endpointIndex, _config.endpoints[endpointIndex]);
+      return;
+    }
+    if (strcmp(sub, "enable") == 0 || strcmp(sub, "disable") == 0) {
+      if (msg.argc < 2) {
+        statusMessage("EP: %s requires endpoint", sub);
+        return;
+      }
+      uint32_t endpointId = 0;
+      if (!parseUint32(msg.argv[1], endpointId) || endpointId == 0 || endpointId > MAX_ENDPOINTS) {
+        statusMessage("EP: invalid endpoint");
+        return;
+      }
+      const uint8_t endpointIndex = static_cast<uint8_t>(endpointId - 1);
+      EndpointConfig &ep = _config.endpoints[endpointIndex];
+      ep.enabled = (strcmp(sub, "enable") == 0) ? 1 : 0;
+      actionSaveConfig();
+      statusMessage("EP%u %s", (unsigned)endpointId, ep.enabled ? "enabled" : "disabled");
       return;
     }
     if (strcmp(sub, "set") == 0) {
@@ -1314,10 +1473,10 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
           }
           ep.type = type;
           if (usesCanBus(ep.type)) {
-            ep.serialPort = 1;
+            ep.serialPort = 0;
             ep.motor = 0;
-          } else if (ep.serialPort < 2) {
-            ep.serialPort = 2;
+          } else if (ep.serialPort < 1) {
+            ep.serialPort = 1;
             if (ep.type == EndpointType::RoboClaw && ep.motor == 0) {
               ep.motor = 1;
             }
@@ -1332,9 +1491,9 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
           }
           ep.serialPort = clampU8(static_cast<int32_t>(port), kEndpointPortMin, kEndpointPortMax);
           if (usesCanBus(ep.type)) {
+            ep.serialPort = 0;
+          } else if (ep.serialPort < 1) {
             ep.serialPort = 1;
-          } else if (ep.serialPort < 2) {
-            ep.serialPort = 2;
           }
           break;
         }
@@ -1418,6 +1577,7 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
           return;
       }
       statusMessage("EP%u updated", (unsigned)endpointId);
+      actionSaveConfig();
       return;
     }
     if (strcmp(sub, "save") == 0) {
@@ -1509,6 +1669,15 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
     }
 
     statusMessage("RC: unknown subcommand");
+    return;
+  }
+
+  if (strcmp(msg.cmd, "can") == 0) {
+    if (msg.argc == 0 || strcmp(msg.argv[0], "status") == 0) {
+      _can.printHealth(Serial);
+      return;
+    }
+    statusMessage("can status");
     return;
   }
 

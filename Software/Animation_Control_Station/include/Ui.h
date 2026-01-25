@@ -2,8 +2,9 @@
 #include <Arduino.h>
 #include <elapsedMillis.h>
 #include "ConfigStore.h"
+#include "BoardPins.h"
 
-static constexpr uint8_t MAX_RC_PORTS = 8;
+static constexpr uint8_t MAX_RC_PORTS = RS422_PORT_COUNT;
 
 struct UiModel {
   enum class Screen : uint8_t {

@@ -7,7 +7,7 @@ static constexpr uint8_t MAX_ENDPOINTS = 16;
 
 struct EndpointConfig {
   EndpointType type = EndpointType::RoboClaw;
-  uint8_t serialPort = 1;  // Interface index (1=CAN, 2-8=RS422 ports)
+  uint8_t serialPort = 0;  // Interface index (0=CAN, 1-7=RS422 ports)
   uint8_t motor = 1;       // RoboClaw motor (1=M1, 2=M2), 0 when unused
   uint32_t address = 0x80; // Device address / CAN ID
   uint8_t enabled = 1;
@@ -53,5 +53,5 @@ public:
 
 private:
   static constexpr uint32_t kMagic = 0x43464731; // "CFG1"
-  static constexpr uint16_t kVersion = 5;
+  static constexpr uint16_t kVersion = 6;
 };

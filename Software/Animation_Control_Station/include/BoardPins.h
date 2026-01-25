@@ -46,19 +46,23 @@ static constexpr uint8_t PIN_POT_ACCEL = A17;
 static constexpr uint8_t PIN_ENC_A = 5;
 static constexpr uint8_t PIN_ENC_B = 4;
 
+// ---------------- CAN: FlexCAN_T4 (CAN2 on pins 0/1) ----------------
+static constexpr uint8_t PIN_CAN_RX = 0;
+static constexpr uint8_t PIN_CAN_TX = 1;
+
 // ---------------- RS485 RoboClaw ports ----------------
 struct Rs422PortPins {
   uint8_t rx;
   uint8_t tx;
 };
 
-static constexpr Rs422PortPins ROBOCLAW_PORT_PINS[8] = {
-  /*1*/ {0,  1},
-  /*2*/ {7,  8},
-  /*3*/ {15, 14},
-  /*4*/ {16, 17},
-  /*5*/ {21, 20},
-  /*6*/ {25, 24},
-  /*7*/ {28, 29},
-  /*8*/ {34, 35},
+static constexpr uint8_t RS422_PORT_COUNT = 7;
+static constexpr Rs422PortPins ROBOCLAW_PORT_PINS[RS422_PORT_COUNT] = {
+  /*1*/ {7,  8},
+  /*2*/ {15, 14},
+  /*3*/ {16, 17},
+  /*4*/ {21, 20},
+  /*5*/ {25, 24},
+  /*6*/ {28, 29},
+  /*7*/ {34, 35},
 };

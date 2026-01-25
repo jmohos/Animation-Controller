@@ -37,10 +37,10 @@ void ConfigStore::setDefaults(AppConfig &cfg) const {
     ep.accelMax = 0;
   }
 
-  // Default endpoints: two CAN MKS servos, then a dual-motor RoboClaw on Serial2.
+  // Default endpoints: two CAN MKS servos, then a dual-motor RoboClaw on Serial2 (port 1).
   EndpointConfig &ep1 = cfg.endpoints[0];
   ep1.type = EndpointType::MksServo;
-  ep1.serialPort = 1;
+  ep1.serialPort = 0;
   ep1.motor = 0;
   ep1.address = 1;
   ep1.enabled = 1;
@@ -53,7 +53,7 @@ void ConfigStore::setDefaults(AppConfig &cfg) const {
 
   EndpointConfig &ep2 = cfg.endpoints[1];
   ep2.type = EndpointType::MksServo;
-  ep2.serialPort = 1;
+  ep2.serialPort = 0;
   ep2.motor = 0;
   ep2.address = 2;
   ep2.enabled = 1;
@@ -66,7 +66,7 @@ void ConfigStore::setDefaults(AppConfig &cfg) const {
 
   EndpointConfig &ep3 = cfg.endpoints[2];
   ep3.type = EndpointType::RoboClaw;
-  ep3.serialPort = 2;
+  ep3.serialPort = 1;
   ep3.motor = 1;
   ep3.address = 0x80;
   ep3.enabled = 1;
@@ -79,7 +79,7 @@ void ConfigStore::setDefaults(AppConfig &cfg) const {
 
   EndpointConfig &ep4 = cfg.endpoints[3];
   ep4.type = EndpointType::RoboClaw;
-  ep4.serialPort = 2;
+  ep4.serialPort = 1;
   ep4.motor = 2;
   ep4.address = 0x80;
   ep4.enabled = 1;
