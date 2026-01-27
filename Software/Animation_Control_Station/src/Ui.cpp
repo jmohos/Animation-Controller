@@ -2,6 +2,7 @@
 #include "BoardPins.h"
 #include "Faults.h"
 #include "MenuDefs.h"
+#include "UnitConversion.h"
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 
@@ -142,22 +143,58 @@ static void drawEndpointConfigEdit(const UiModel &model) {
         canvas->printf("%c MOTOR:  %u", cursor, (unsigned)ep.motor);
         break;
       case EndpointField::PositionMin:
-        canvas->printf("%c PMIN:   %ld", cursor, (long)ep.positionMin);
+        if (UnitConverter::usesEngineeringUnits(ep)) {
+          canvas->printf("%c PMIN:   %lddeg", cursor, (long)ep.positionMin);
+        } else {
+          canvas->printf("%c PMIN:   %ld", cursor, (long)ep.positionMin);
+        }
         break;
       case EndpointField::PositionMax:
-        canvas->printf("%c PMAX:   %ld", cursor, (long)ep.positionMax);
+        if (UnitConverter::usesEngineeringUnits(ep)) {
+          canvas->printf("%c PMAX:   %lddeg", cursor, (long)ep.positionMax);
+        } else {
+          canvas->printf("%c PMAX:   %ld", cursor, (long)ep.positionMax);
+        }
         break;
       case EndpointField::VelocityMin:
-        canvas->printf("%c VMIN:   %lu", cursor, (unsigned long)ep.velocityMin);
+        if (UnitConverter::usesEngineeringUnits(ep)) {
+          canvas->printf("%c VMIN:   %ludeg/s", cursor, (unsigned long)ep.velocityMin);
+        } else {
+          canvas->printf("%c VMIN:   %lu", cursor, (unsigned long)ep.velocityMin);
+        }
         break;
       case EndpointField::VelocityMax:
-        canvas->printf("%c VMAX:   %lu", cursor, (unsigned long)ep.velocityMax);
+        if (UnitConverter::usesEngineeringUnits(ep)) {
+          canvas->printf("%c VMAX:   %ludeg/s", cursor, (unsigned long)ep.velocityMax);
+        } else {
+          canvas->printf("%c VMAX:   %lu", cursor, (unsigned long)ep.velocityMax);
+        }
         break;
       case EndpointField::AccelMin:
-        canvas->printf("%c AMIN:   %lu", cursor, (unsigned long)ep.accelMin);
+        if (UnitConverter::usesEngineeringUnits(ep)) {
+          canvas->printf("%c AMIN:   %ludeg/s2", cursor, (unsigned long)ep.accelMin);
+        } else {
+          canvas->printf("%c AMIN:   %lu", cursor, (unsigned long)ep.accelMin);
+        }
         break;
       case EndpointField::AccelMax:
-        canvas->printf("%c AMAX:   %lu", cursor, (unsigned long)ep.accelMax);
+        if (UnitConverter::usesEngineeringUnits(ep)) {
+          canvas->printf("%c AMAX:   %ludeg/s2", cursor, (unsigned long)ep.accelMax);
+        } else {
+          canvas->printf("%c AMAX:   %lu", cursor, (unsigned long)ep.accelMax);
+        }
+        break;
+      case EndpointField::PulsesPerRev:
+        canvas->printf("%c PPR:    %lu", cursor, (unsigned long)ep.pulsesPerRevolution);
+        break;
+      case EndpointField::HomeOffset:
+        canvas->printf("%c HOMEOFF:%ld", cursor, (long)ep.homeOffset);
+        break;
+      case EndpointField::HomeDirection:
+        canvas->printf("%c HOMEDIR:%s", cursor, ep.homeDirection ? "POS" : "NEG");
+        break;
+      case EndpointField::HasLimitSwitch:
+        canvas->printf("%c LIMIT:  %s", cursor, ep.hasLimitSwitch ? "YES" : "NO");
         break;
       default:
         break;

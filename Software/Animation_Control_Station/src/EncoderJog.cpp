@@ -66,9 +66,8 @@ void EncoderJog::isrB() { isrA(); }
 int32_t EncoderJog::consumeDelta() {
   static int32_t lastReadPosition = 0;
   static int32_t tickRemainder = 0;
-  noInterrupts();
-  int32_t position = _position;
-  interrupts();
+  // Use atomic load instead of noInterrupts()
+  int32_t position = __atomic_load_n(&_position, __ATOMIC_SEQ_CST);
   int32_t delta = position - lastReadPosition;
   lastReadPosition = position;
   tickRemainder += delta;

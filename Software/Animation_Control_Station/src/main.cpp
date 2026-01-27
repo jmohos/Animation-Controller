@@ -4,6 +4,10 @@
 #include "BoardPins.h"
 #include "Faults.h"
 #include "MenuDefs.h"
+#include "Utils.h"
+#include "UnitConversion.h"
+#include "MksServoProtocol.h"
+#include <Watchdog_t4.h>
 #include <cstring>
 #include <cstdlib>
 #include <cstdarg>
@@ -11,9 +15,8 @@
 #include <climits>
 
 App g_app;
+WDT_T4<WDT1> wdt;  // Watchdog timer instance
 
-static constexpr uint32_t kMaxVelocityCountsPerSec = 50000;
-static constexpr uint32_t kMaxAccelCountsPerSec2 = 50000;
 static constexpr uint32_t kCanBitrate = 500000;
 static constexpr uint8_t kEndpointPortMin = 0;
 static constexpr uint8_t kEndpointPortMax = RS422_PORT_COUNT;
@@ -43,94 +46,7 @@ enum class EditField : uint8_t {
 
 static constexpr uint8_t kEditFieldCount = static_cast<uint8_t>(EditField::Count);
 
-static uint8_t clampU8(int32_t value, uint8_t minValue, uint8_t maxValue) {
-  if (value < minValue) {
-    return minValue;
-  }
-  if (value > maxValue) {
-    return maxValue;
-  }
-  return static_cast<uint8_t>(value);
-}
-
-static uint32_t clampU32(int64_t value, uint32_t minValue, uint32_t maxValue) {
-  if (value < static_cast<int64_t>(minValue)) {
-    return minValue;
-  }
-  if (value > static_cast<int64_t>(maxValue)) {
-    return maxValue;
-  }
-  return static_cast<uint32_t>(value);
-}
-
-static int32_t clampI32(int64_t value, int32_t minValue, int32_t maxValue) {
-  if (value < static_cast<int64_t>(minValue)) {
-    return minValue;
-  }
-  if (value > static_cast<int64_t>(maxValue)) {
-    return maxValue;
-  }
-  return static_cast<int32_t>(value);
-}
-
-static uint32_t clampU32Range(uint32_t value, uint32_t minValue, uint32_t maxValue) {
-  if (maxValue > 0) {
-    if (maxValue < minValue) {
-      minValue = maxValue;
-    }
-    if (value < minValue) {
-      return minValue;
-    }
-    if (value > maxValue) {
-      return maxValue;
-    }
-  } else if (minValue > 0 && value < minValue) {
-    return minValue;
-  }
-  return value;
-}
-
-static int32_t clampI32Range(int32_t value, int32_t minValue, int32_t maxValue) {
-  if (maxValue > minValue) {
-    if (value < minValue) {
-      return minValue;
-    }
-    if (value > maxValue) {
-      return maxValue;
-    }
-  }
-  return value;
-}
-
-static bool parseUint32(const char *text, uint32_t &value) {
-  if (!text) {
-    return false;
-  }
-  int base = 10;
-  if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
-    base = 16;
-  }
-  char *end = nullptr;
-  value = strtoul(text, &end, base);
-  return (end != text);
-}
-
-static bool parseInt32(const char *text, int32_t &value) {
-  if (!text) {
-    return false;
-  }
-  int base = 10;
-  if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
-    base = 16;
-  }
-  char *end = nullptr;
-  long parsed = strtol(text, &end, base);
-  if (end == text) {
-    return false;
-  }
-  value = static_cast<int32_t>(parsed);
-  return true;
-}
+// Parsing and clamping functions moved to Utils.h/cpp
 
 static bool parseBoolToken(const char *text, uint8_t &value) {
   if (!text) {
@@ -200,6 +116,22 @@ static bool parseEndpointFieldName(const char *text, EndpointField &field) {
     field = EndpointField::AccelMax;
     return true;
   }
+  if (strcmp(text, "ppr") == 0 || strcmp(text, "pulses_per_rev") == 0 || strcmp(text, "pulses_per_revolution") == 0) {
+    field = EndpointField::PulsesPerRev;
+    return true;
+  }
+  if (strcmp(text, "home_offset") == 0 || strcmp(text, "homeoff") == 0) {
+    field = EndpointField::HomeOffset;
+    return true;
+  }
+  if (strcmp(text, "home_dir") == 0 || strcmp(text, "home_direction") == 0) {
+    field = EndpointField::HomeDirection;
+    return true;
+  }
+  if (strcmp(text, "limit") == 0 || strcmp(text, "has_limit") == 0 || strcmp(text, "has_limit_switch") == 0) {
+    field = EndpointField::HasLimitSwitch;
+    return true;
+  }
   return false;
 }
 
@@ -234,53 +166,36 @@ static bool usesCanBus(EndpointType type) {
           type == EndpointType::JoeServoCan);
 }
 
-static uint8_t mksServoChecksum(uint16_t canId, const uint8_t *data, uint8_t len) {
-  uint32_t sum = static_cast<uint8_t>(canId & 0xFFu);
-  for (uint8_t i = 0; i < len; i++) {
-    sum += data[i];
-  }
-  return static_cast<uint8_t>(sum & 0xFFu);
-}
-
-static uint32_t encodeMksServoInt24(int32_t value) {
-  const int32_t maxPos = 0x7FFFFF;
-  if (value > maxPos) {
-    value = maxPos;
-  } else if (value < -maxPos) {
-    value = -maxPos;
-  }
-  if (value < 0) {
-    return static_cast<uint32_t>((1u << 24) + value);
-  }
-  return static_cast<uint32_t>(value);
-}
+// MKS Servo protocol functions moved to MksServoProtocol.h/cpp
 
 static bool sendMksServoPosition(CanBus &can, const EndpointConfig &endpoint, int32_t position,
                                  uint32_t velocity, uint32_t accel) {
   if (endpoint.address > 0x7FFu) {
     return false;
   }
-  uint32_t speed = clampU32Range(velocity, endpoint.velocityMin, endpoint.velocityMax);
-  if (speed > 3000u) {
-    speed = 3000u;
-  }
-  uint32_t acc = clampU32Range(accel, endpoint.accelMin, endpoint.accelMax);
-  if (acc > 255u) {
-    acc = 255u;
-  }
-  const int32_t pos = clampI32Range(position, endpoint.positionMin, endpoint.positionMax);
-  const uint16_t canId = static_cast<uint16_t>(endpoint.address);
-  const uint32_t axis = encodeMksServoInt24(pos);
 
+  // Convert engineering units to device units if enabled
+  int32_t devicePos = UnitConverter::degreesToPulses(static_cast<float>(position), endpoint);
+  uint32_t deviceVel = UnitConverter::degPerSecToDeviceVelocity(static_cast<float>(velocity), endpoint);
+  uint32_t deviceAccel = UnitConverter::degPerSec2ToDeviceAccel(static_cast<float>(accel), endpoint);
+
+  // Clamp to device limits
+  uint32_t speed = deviceVel;
+  if (speed > MksServo::MAX_VELOCITY_RPM) {
+    speed = MksServo::MAX_VELOCITY_RPM;
+  }
+  uint32_t acc = deviceAccel;
+  if (acc > MksServo::MAX_ACCEL) {
+    acc = MksServo::MAX_ACCEL;
+  }
+
+  const uint16_t canId = static_cast<uint16_t>(endpoint.address);
+
+  // Pack the MKS Servo position command
   uint8_t data[8] = {};
-  data[0] = 0xF5;
-  data[1] = static_cast<uint8_t>((speed >> 8) & 0xFFu);
-  data[2] = static_cast<uint8_t>(speed & 0xFFu);
-  data[3] = static_cast<uint8_t>(acc & 0xFFu);
-  data[4] = static_cast<uint8_t>((axis >> 16) & 0xFFu);
-  data[5] = static_cast<uint8_t>((axis >> 8) & 0xFFu);
-  data[6] = static_cast<uint8_t>(axis & 0xFFu);
-  data[7] = mksServoChecksum(canId, data, 7);
+  if (!MksServoProtocol::packPosition(canId, static_cast<uint16_t>(speed), static_cast<uint8_t>(acc), devicePos, data)) {
+    return false;
+  }
   Serial.printf("CAN TX ID: 0x%03X DATA: ", canId);
   for (int i = 0; i < 8; i++) {
     Serial.printf("%02X", data[i]);
@@ -295,25 +210,32 @@ static bool sendMksServoPosition(CanBus &can, const EndpointConfig &endpoint, in
 }
 
 static void printEndpointConfig(Stream &out, uint8_t endpointIndex, const EndpointConfig &ep) {
-  out.printf("EP%u: type=%s addr=0x%08lX %s pos=[%ld..%ld] vel=[%lu..%lu] acc=[%lu..%lu]",
-             (unsigned)(endpointIndex + 1),
+  const uint8_t epNum = endpointIndex + 1;
+  const char *units = (ep.pulsesPerRevolution > 0) ? " (deg/deg/s/deg/s²)" : " (device units)";
+
+  out.printf("EP%u: type=%s addr=0x%08lX %s%s\n",
+             (unsigned)epNum,
              endpointTypeName(ep.type),
              (unsigned long)ep.address,
-             ep.enabled ? "EN" : "DIS",
-             (long)ep.positionMin,
-             (long)ep.positionMax,
-             (unsigned long)ep.velocityMin,
-             (unsigned long)ep.velocityMax,
-             (unsigned long)ep.accelMin,
-             (unsigned long)ep.accelMax);
+             ep.enabled ? "ENABLED" : "DISABLED",
+             units);
+
+  out.printf("  Position: [%ld..%ld]", (long)ep.positionMin, (long)ep.positionMax);
+  out.printf("  Velocity: [%lu..%lu]", (unsigned long)ep.velocityMin, (unsigned long)ep.velocityMax);
+  out.printf("  Accel: [%lu..%lu]\n", (unsigned long)ep.accelMin, (unsigned long)ep.accelMax);
+
   if (ep.type == EndpointType::RoboClaw) {
-    out.printf(" port=%u motor=%u", (unsigned)ep.serialPort, (unsigned)ep.motor);
+    out.printf("  Serial Port: %u  Motor: %u", (unsigned)ep.serialPort, (unsigned)ep.motor);
   } else if (usesCanBus(ep.type)) {
-    out.printf(" iface=CAN");
+    out.printf("  Interface: CAN");
   } else {
-    out.printf(" iface=%u", (unsigned)ep.serialPort);
+    out.printf("  Interface: Serial %u", (unsigned)ep.serialPort);
   }
-  out.println();
+
+  out.printf("  PPR: %lu", (unsigned long)ep.pulsesPerRevolution);
+  out.printf("  Home Offset: %ld", (long)ep.homeOffset);
+  out.printf("  Home Dir: %s", ep.homeDirection ? "POS" : "NEG");
+  out.printf("  Limit: %s\n", ep.hasLimitSwitch ? "YES" : "NO");
 }
 
 static uint8_t wrapIndexUp(uint8_t index, uint8_t count) {
@@ -408,8 +330,14 @@ void App::begin() {
  * Outputs: Updates model values and drives outputs each tick.
  */
 void App::loop() {
+  // Feed watchdog at start of loop
+  wdt.feed();
+
   // Process console commands via USB serial of Teensy 4.1
   _console.poll();
+
+  // Process CAN bus received frames
+  _can.processRxFrames();
 
   // Process button inputs from user interface.
   ButtonState buttonState = _buttons.poll();
@@ -689,8 +617,14 @@ void App::loop() {
           if (ep->positionMax > ep->positionMin) {
             pos = clampI32(pos, ep->positionMin, ep->positionMax);
           }
-          uint32_t position = static_cast<uint32_t>(pos);
-          const bool ok = _roboclaw.commandPosition(portIndex, static_cast<uint8_t>(ep->address), ep->motor, position, velocity, accel);
+
+          // Convert engineering units to device units if enabled
+          int32_t devicePos = UnitConverter::degreesToPulses(static_cast<float>(pos), *ep);
+          uint32_t deviceVel = UnitConverter::degPerSecToDeviceVelocity(static_cast<float>(velocity), *ep);
+          uint32_t deviceAccel = UnitConverter::degPerSec2ToDeviceAccel(static_cast<float>(accel), *ep);
+
+          uint32_t position = static_cast<uint32_t>(devicePos);
+          const bool ok = _roboclaw.commandPosition(portIndex, static_cast<uint8_t>(ep->address), ep->motor, position, deviceVel, deviceAccel);
           setStatusLine("MOVE %s", ok ? "OK" : "FAIL");
         } else {
           setStatusLine("MOVE EP ERR");
@@ -780,7 +714,21 @@ void App::loop() {
       _sequence.setEvent(_editEventIndex, ev, nullptr, true);
     }
   } else if (_screen != UiScreen::EndpointConfig && _screen != UiScreen::EndpointConfigEdit) {
-    _model.jogPos += encoderDelta;
+    // Update jog position - convert encoder ticks to appropriate units
+    if (_model.selectedMotor < MAX_ENDPOINTS) {
+      const EndpointConfig &ep = _config.endpoints[_model.selectedMotor];
+      if (UnitConverter::usesEngineeringUnits(ep)) {
+        // Engineering units mode: 100 encoder ticks = 360 degrees (1 full rotation)
+        const float degreesPerTick = 360.0f / 100.0f;
+        const float degrees = encoderDelta * degreesPerTick;
+        _model.jogPos = static_cast<int32_t>(static_cast<float>(_model.jogPos) + degrees);
+      } else {
+        // Device units mode: direct tick-to-pulse mapping
+        _model.jogPos += encoderDelta;
+      }
+    } else {
+      _model.jogPos += encoderDelta;
+    }
   }
 
   if (_screen == UiScreen::Auto && _model.playing && _sequence.loaded()) {
@@ -790,8 +738,9 @@ void App::loop() {
   _can.events();
   _can.dumpRxLog(Serial);
   _can.logErrorCounters(Serial, millis());
-  
+
   pollRoboClaws();
+  pollCanEndpoints();
 
   const EndpointConfig *selectedEp = nullptr;
   uint8_t selectedPortIndex = 0;
@@ -984,6 +933,43 @@ void App::pollRoboClaws() {
     _rcStatusByEndpointValid[endpointIndex] = ok;
     _rcPollIndex = static_cast<uint8_t>((endpointIndex + 1) % MAX_ENDPOINTS);
     return;
+  }
+}
+
+void App::pollCanEndpoints() {
+  const uint32_t now = millis();
+  if ((now - _lastCanPollMs) < kRcPollPeriodMs) {
+    return;
+  }
+  _lastCanPollMs = now;
+
+  // Poll one CAN endpoint per cycle (round-robin)
+  for (uint8_t i = 0; i < MAX_ENDPOINTS; ++i) {
+    const uint8_t epIndex = static_cast<uint8_t>((_canPollIndex + i) % MAX_ENDPOINTS);
+    const EndpointConfig &ep = _config.endpoints[epIndex];
+
+    // Only poll enabled MKS Servo endpoints
+    if (!ep.enabled || ep.type != EndpointType::MksServo) {
+      continue;
+    }
+    if (ep.address > 0x7FF) {
+      continue;
+    }
+
+    // Request status from this servo
+    uint16_t canId = static_cast<uint16_t>(ep.address);
+    _can.requestMksServoStatus(canId);
+
+    // Try to get cached status
+    MksServoStatus status;
+    if (_can.getMksServoStatus(canId, status)) {
+      _canStatusByEndpoint[epIndex] = status;
+      _canStatusByEndpointValid[epIndex] = true;
+    }
+
+    // Advance to next endpoint for next poll
+    _canPollIndex = static_cast<uint8_t>((epIndex + 1) % MAX_ENDPOINTS);
+    return;  // Only poll one endpoint per cycle
   }
 }
 
@@ -1250,6 +1236,38 @@ void App::adjustEndpointField(int32_t delta) {
       }
       break;
     }
+    case EndpointField::PulsesPerRev: {
+      const int64_t value = static_cast<int64_t>(ep.pulsesPerRevolution) + (static_cast<int64_t>(delta) * 1000);
+      const uint32_t next = clampU32(value, 0, 1000000);  // Max 1M pulses/rev
+      if (next != ep.pulsesPerRevolution) {
+        ep.pulsesPerRevolution = next;
+        changed = true;
+      }
+      break;
+    }
+    case EndpointField::HomeOffset: {
+      const int64_t value = static_cast<int64_t>(ep.homeOffset) + (static_cast<int64_t>(delta) * 100);
+      const int32_t next = clampI32(value, INT32_MIN, INT32_MAX);
+      if (next != ep.homeOffset) {
+        ep.homeOffset = next;
+        changed = true;
+      }
+      break;
+    }
+    case EndpointField::HomeDirection: {
+      if (ep.homeDirection != ((delta > 0) ? 1 : 0)) {
+        ep.homeDirection = (delta > 0) ? 1 : 0;
+        changed = true;
+      }
+      break;
+    }
+    case EndpointField::HasLimitSwitch: {
+      if (ep.hasLimitSwitch != ((delta > 0) ? 1 : 0)) {
+        ep.hasLimitSwitch = (delta > 0) ? 1 : 0;
+        changed = true;
+      }
+      break;
+    }
     default:
       break;
   }
@@ -1263,9 +1281,22 @@ void App::adjustEndpointField(int32_t delta) {
  * Inputs: None.
  * Outputs: Initializes logging and application subsystems.
  */
+void watchdogCallback() {
+  Serial.println("WATCHDOG TRIGGERED - SYSTEM RESET");
+}
+
 void setup() {
   logInit(115200);
   LOGI("Boot");
+
+  // Configure watchdog: 5 second timeout
+  WDT_timings_t config;
+  config.timeout = 5;     // seconds
+  config.trigger = 4;     // reset at 4 seconds
+  config.callback = watchdogCallback;
+  wdt.begin(config);
+
+  Serial.println("Watchdog enabled (5s timeout)");
 
   g_app.begin();
 }
@@ -1296,6 +1327,8 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
     Serial.println("  ep enable <endpoint>");
     Serial.println("  ep disable <endpoint>");
     Serial.println("  ep set <endpoint> <field> <value>");
+    Serial.println("    fields: enabled, type, address, serial, motor, pos_min, pos_max,");
+    Serial.println("            vmin, vmax, amin, amax, ppr, home_offset, home_dir, limit");
     Serial.println("  ep save");
     Serial.println("  seq load [path]");
     Serial.println("  seq info");
@@ -1570,6 +1603,42 @@ void App::handleConsoleCommand(const CommandMsg &msg) {
             return;
           }
           ep.accelMax = clampU32(static_cast<int64_t>(amax), 0, kEndpointRateMax);
+          break;
+        }
+        case EndpointField::PulsesPerRev: {
+          uint32_t ppr = 0;
+          if (!parseUint32(msg.argv[3], ppr)) {
+            statusMessage("EP: ppr expects number");
+            return;
+          }
+          ep.pulsesPerRevolution = clampU32(static_cast<int64_t>(ppr), 0, 1000000);
+          break;
+        }
+        case EndpointField::HomeOffset: {
+          int32_t offset = 0;
+          if (!parseInt32(msg.argv[3], offset)) {
+            statusMessage("EP: home_offset expects number");
+            return;
+          }
+          ep.homeOffset = offset;
+          break;
+        }
+        case EndpointField::HomeDirection: {
+          uint32_t dir = 0;
+          if (!parseUint32(msg.argv[3], dir)) {
+            statusMessage("EP: home_dir expects 0 or 1");
+            return;
+          }
+          ep.homeDirection = (dir != 0) ? 1 : 0;
+          break;
+        }
+        case EndpointField::HasLimitSwitch: {
+          uint8_t hasLimit = 0;
+          if (!parseBoolToken(msg.argv[3], hasLimit)) {
+            statusMessage("EP: limit expects on/off/0/1");
+            return;
+          }
+          ep.hasLimitSwitch = hasLimit;
           break;
         }
         default:

@@ -2,6 +2,19 @@
 #include <Arduino.h>
 #include <FlexCAN_T4.h>
 
+/**
+ * MKS Servo status data structure.
+ * Holds current position, velocity, current, and error state.
+ */
+struct MksServoStatus {
+  int32_t position = 0;      // Current position in pulses
+  uint16_t velocity = 0;     // Current velocity in RPM
+  uint8_t current = 0;       // Motor current (0-255)
+  uint8_t errorCode = 0;     // Error flags
+  bool valid = false;        // Data valid flag
+  uint32_t lastUpdateMs = 0; // Timestamp of last update
+};
+
 class CanBus {
 public:
   /**
@@ -56,11 +69,41 @@ public:
    */
   size_t dumpRxLog(Stream &out, size_t max = 8);
 
+  /**
+   * Description: Request status from MKS Servo.
+   * Inputs:
+   * - canId: CAN identifier of the servo
+   * Outputs: Returns true if request was queued
+   */
+  bool requestMksServoStatus(uint16_t canId);
+
+  /**
+   * Description: Get cached status for an MKS Servo.
+   * Inputs:
+   * - canId: CAN identifier of the servo
+   * - status: output status structure
+   * Outputs: Returns true if status is available and valid
+   */
+  bool getMksServoStatus(uint16_t canId, MksServoStatus &status);
+
+  /**
+   * Description: Process received CAN frames.
+   * Should be called regularly in main loop to handle RX messages.
+   * Inputs: None
+   * Outputs: None
+   */
+  void processRxFrames();
+
 private:
   static void handleRxStatic(const CAN_message_t &msg);
   void enqueueRxLog(const CAN_message_t &msg);
   bool popRxLog(CAN_message_t &msg);
   bool readErrorCounters(uint32_t &esr1, uint16_t &ecr);
+
+  // MKS Servo status tracking
+  void handleMksServoResponse(const CAN_message_t &msg);
+  uint8_t findServoIndex(uint16_t canId);
+  uint8_t registerServo(uint16_t canId);
 
   static constexpr bool kPollRx =
 #if defined(CANBUS_USE_INTERRUPTS)
@@ -84,4 +127,10 @@ private:
   volatile uint8_t _rxLogHead = 0;
   volatile uint8_t _rxLogTail = 0;
   volatile bool _rxLogOverflow = false;
+
+  // MKS Servo status tracking
+  static constexpr size_t kMaxTrackedServos = 16;
+  MksServoStatus _servoStatus[kMaxTrackedServos] = {};
+  uint16_t _servoCanIds[kMaxTrackedServos] = {};
+  uint8_t _servoCount = 0;
 };

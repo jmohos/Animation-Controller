@@ -115,14 +115,15 @@ bool SdCardManager::loadEndpointConfig(AppConfig &cfg, Stream &out) {
     }
 
     char *token = strtok(cursor, ",");
-    char *tokens[12] = {};
+    char *tokens[16] = {};
     uint8_t count = 0;
-    while (token && count < 12) {
+    while (token && count < 16) {
       tokens[count++] = token;
       token = strtok(nullptr, ",");
     }
+    // Support both 12-field (old) and 16-field (new) format
     if (count < 12) {
-      out.printf("CFG: skip line (need 12 fields): %s\n", line);
+      out.printf("CFG: skip line (need 12 or 16 fields): %s\n", line);
       continue;
     }
 
@@ -152,6 +153,28 @@ bool SdCardManager::loadEndpointConfig(AppConfig &cfg, Stream &out) {
         !parseUint(tokens[11], motor)) {
       out.printf("CFG: parse error: %s\n", line);
       continue;
+    }
+
+    // Parse new fields (12-15) if present in 16-field format
+    uint32_t pulsesPerRev = 0;
+    int32_t homeOffset = 0;
+    uint32_t homeDir = 0;
+    uint32_t hasLimit = 0;
+
+    if (count >= 13) {
+      if (!parseUint(tokens[12], pulsesPerRev)) {
+        out.printf("CFG: parse error (pulses_per_rev): %s\n", line);
+        continue;
+      }
+    }
+    if (count >= 14) {
+      parseInt(tokens[13], homeOffset);  // Optional, ignore parse errors
+    }
+    if (count >= 15) {
+      parseUint(tokens[14], homeDir);    // Optional, ignore parse errors
+    }
+    if (count >= 16) {
+      parseUint(tokens[15], hasLimit);   // Optional, ignore parse errors
     }
 
     if (endpointId == 0 || endpointId > MAX_ENDPOINTS) {
@@ -199,6 +222,12 @@ bool SdCardManager::loadEndpointConfig(AppConfig &cfg, Stream &out) {
     ep.accelMax = accMax;
     ep.serialPort = (port <= RS422_PORT_COUNT) ? static_cast<uint8_t>(port) : ep.serialPort;
     ep.motor = (motor <= 2) ? static_cast<uint8_t>(motor) : ep.motor;
+
+    // Assign new calibration and homing fields
+    ep.pulsesPerRevolution = pulsesPerRev;
+    ep.homeOffset = homeOffset;
+    ep.homeDirection = (homeDir != 0) ? 1 : 0;
+    ep.hasLimitSwitch = (hasLimit != 0) ? 1 : 0;
   }
 
   file.close();
@@ -213,10 +242,11 @@ bool SdCardManager::saveEndpointConfig(const AppConfig &cfg, Stream &out) {
   if (!file) {
     return false;
   }
-  file.println("# endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor");
+  file.println("# endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor,pulses_per_rev,home_offset,home_direction,has_limit_switch");
+  file.println("# Note: position_min/max in degrees, velocity in deg/s, accel in deg/s² when pulses_per_rev > 0");
   for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
     const EndpointConfig &ep = cfg.endpoints[i];
-    file.printf("%u,%s,0x%08lX,%u,%ld,%ld,%lu,%lu,%lu,%lu,%u,%u\n",
+    file.printf("%u,%s,0x%08lX,%u,%ld,%ld,%lu,%lu,%lu,%lu,%u,%u,%lu,%ld,%u,%u\n",
                 (unsigned)(i + 1),
                 endpointTypeName(ep.type),
                 (unsigned long)ep.address,
@@ -228,7 +258,11 @@ bool SdCardManager::saveEndpointConfig(const AppConfig &cfg, Stream &out) {
                 (unsigned long)ep.accelMin,
                 (unsigned long)ep.accelMax,
                 (unsigned)ep.serialPort,
-                (unsigned)ep.motor);
+                (unsigned)ep.motor,
+                (unsigned long)ep.pulsesPerRevolution,
+                (long)ep.homeOffset,
+                (unsigned)ep.homeDirection,
+                (unsigned)ep.hasLimitSwitch);
   }
   file.close();
   out.printf("CFG: wrote %s\n", kEndpointConfigPath);
@@ -421,10 +455,11 @@ void SdCardManager::stripInlineComment(char *line) const {
 
 void SdCardManager::writeEndpointsSection(FsFile &file, const AppConfig &cfg) {
   file.println("[endpoints]");
-  file.println("# endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor");
+  file.println("# endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor,pulses_per_rev,home_offset,home_direction,has_limit_switch");
+  file.println("# Note: position_min/max in degrees, velocity in deg/s, accel in deg/s² when pulses_per_rev > 0");
   for (uint8_t i = 0; i < MAX_ENDPOINTS; i++) {
     const EndpointConfig &ep = cfg.endpoints[i];
-    file.printf("%u,%s,0x%08lX,%u,%ld,%ld,%lu,%lu,%lu,%lu,%u,%u\n",
+    file.printf("%u,%s,0x%08lX,%u,%ld,%ld,%lu,%lu,%lu,%lu,%u,%u,%lu,%ld,%u,%u\n",
                 (unsigned)(i + 1),
                 endpointTypeName(ep.type),
                 (unsigned long)ep.address,
@@ -436,7 +471,11 @@ void SdCardManager::writeEndpointsSection(FsFile &file, const AppConfig &cfg) {
                 (unsigned long)ep.accelMin,
                 (unsigned long)ep.accelMax,
                 (unsigned)ep.serialPort,
-                (unsigned)ep.motor);
+                (unsigned)ep.motor,
+                (unsigned long)ep.pulsesPerRevolution,
+                (long)ep.homeOffset,
+                (unsigned)ep.homeDirection,
+                (unsigned)ep.hasLimitSwitch);
   }
 }
 

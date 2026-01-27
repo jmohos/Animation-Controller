@@ -44,14 +44,18 @@ Endpoint config schema (CSV columns, in order):
 2. `type` - `ROBOCLAW`, `MKS_SERVO`, `REV_FRC_CAN`, `JOE_SERVO_SERIAL`, or `JOE_SERVO_CAN`.
 3. `address` - Device address or CAN ID (hex allowed, e.g. `0x80`).
 4. `enabled` - `1` or `0`.
-5. `position_min` - Minimum allowed position.
-6. `position_max` - Maximum allowed position.
-7. `velocity_min` - Minimum allowed velocity.
-8. `velocity_max` - Maximum allowed velocity.
-9. `accel_min` - Minimum allowed acceleration.
-10. `accel_max` - Maximum allowed acceleration.
+5. `position_min` - Minimum allowed position (degrees if `pulses_per_rev > 0`, else device units).
+6. `position_max` - Maximum allowed position (degrees if `pulses_per_rev > 0`, else device units).
+7. `velocity_min` - Minimum allowed velocity (deg/s if `pulses_per_rev > 0`, else device units).
+8. `velocity_max` - Maximum allowed velocity (deg/s if `pulses_per_rev > 0`, else device units).
+9. `accel_min` - Minimum allowed acceleration (deg/s² if `pulses_per_rev > 0`, else device units).
+10. `accel_max` - Maximum allowed acceleration (deg/s² if `pulses_per_rev > 0`, else device units).
 11. `serial_port` - Interface index (0=CAN on pins 0/1, 1-7=RS422 serial ports).
 12. `motor` - RoboClaw motor channel (`1` or `2`), `0` when unused.
+13. `pulses_per_rev` - Pulses per revolution for engineering units (0 = device units mode, >0 enables degrees/deg/s units).
+14. `home_offset` - Offset from limit switch to zero position in pulses.
+15. `home_direction` - Homing direction (0=negative, 1=positive).
+16. `has_limit_switch` - Limit switch present (0=no, 1=yes).
 
 Sequence schema (CSV columns, in order):
 1. `time_ms` - Integer milliseconds from 0 to 300000.
@@ -64,9 +68,9 @@ Sequence schema (CSV columns, in order):
 Example:
 ```
 # endpoints.csv
-# endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor
-1,MKS_SERVO,0x00000001,1,-1000,1000,0,1000,0,1000,0,0
-2,ROBOCLAW,0x00000080,1,-1000,1000,0,1000,0,1000,1,1
+# endpoint_id,type,address,enabled,position_min,position_max,velocity_min,velocity_max,accel_min,accel_max,serial_port,motor,pulses_per_rev,home_offset,home_direction,has_limit_switch
+1,MKS_SERVO,0x00000001,1,-360,360,0,100,0,50,0,0,16384,0,0,0
+2,ROBOCLAW,0x00000080,1,-360,360,0,100,0,50,1,1,4096,0,0,0
 
 # animation.csv
 [sequence]
@@ -82,6 +86,150 @@ Notes:
 - Serial1 (pins 0/1) is reserved for the CAN transceiver and is not available for RS422 endpoints.
 - The CAN bus is initialized at 500 kbps.
 - Default SD card files live in `Software/Animation_Control_Station/sd_defaults`.
+
+## Known Issues
+
+### CAN Bus Interrupt Mode
+The CAN bus currently operates in **polled mode only**. Interrupt mode causes system crashes on Teensy 4.1. This is a known issue with the FlexCAN_T4 library or hardware timing.
+
+**Workaround**: The code uses `CANBUS_USE_POLLING` (defined by default). The `CanBus::events()` method explicitly reads the mailbox each loop iteration. Performance impact is minimal at 500 kbps.
+
+**Status**: Under investigation. Do not enable `CANBUS_USE_INTERRUPTS`.
+
+### EEPROM Configuration Migration
+Upgrading from firmware versions with config version < 7 will reset endpoint configuration to defaults. After upgrading, reload your `/endpoints.csv` file from SD card.
+
+## Troubleshooting
+
+### CAN Bus Issues
+- **Symptom**: MKS Servo not responding
+- **Check**: Verify CAN transceiver connected to Teensy pins 0 (CAN_TX) and 1 (CAN_RX)
+- **Check**: Verify 500 kbps bitrate match on all devices
+- **Check**: CAN bus requires 120Ω termination resistors at both ends
+- **Debug**: Use console command `can status` to check error counters
+
+### SD Card Not Detected
+- **Symptom**: "SD card not ready" message on boot
+- **Check**: SD card must be formatted as FAT32
+- **Check**: Verify `/endpoints.csv` and `/animation.csv` exist in root directory
+- **Check**: Use known-good SD card (some cards have compatibility issues)
+- **Recovery**: Copy files from `sd_defaults/` directory
+
+### RoboClaw Not Responding
+- **Symptom**: No motion from RoboClaw-controlled motors
+- **Check**: RoboClaw must be in **Packet Serial mode** at 115200 baud
+- **Check**: Verify RS422 serial connections (TX/RX not swapped)
+- **Check**: Verify RoboClaw address matches `endpoints.csv` configuration
+- **Debug**: Use console command `rc status <endpoint_id>` to read encoder values
+
+### Encoder Position Drift
+- **Symptom**: Position drifts over time or after power cycle
+- **Solution**: Perform homing sequence with `home <endpoint_id>` command
+- **Check**: Verify limit switches are properly wired and configured
+- **Check**: Verify `has_limit_switch=1` in endpoints.csv for endpoints that support homing
+
+## Engineering Units System
+
+Starting with firmware version 7, the system supports **engineering units** for position, velocity, and acceleration commands. This allows you to specify motion in degrees and degrees per second regardless of the underlying hardware.
+
+### Configuration
+
+Set the `pulses_per_rev` field in `/endpoints.csv` to enable engineering units for an endpoint:
+
+```csv
+endpoint_id,type,address,...,pulses_per_rev,home_offset,home_direction,has_limit_switch
+1,MKS_SERVO,0x00000001,...,16384,0,0,0
+```
+
+**Pulses Per Revolution Values**:
+- **MKS Servo**: 16384 pulses/revolution (encoder subdivisions, default)
+- **RoboClaw**: Depends on encoder resolution and gearing (e.g., 4096 for common encoders)
+- **Custom**: Calculate as: `encoder_lines * 4 * gearing_ratio * microstepping`
+
+**Important**: The `pulses_per_rev` value must account for:
+1. Encoder resolution (quadrature count = 4× encoder lines)
+2. Microstepping (if applicable)
+3. Gearing between motor shaft and final output shaft
+
+### Units
+
+When `pulses_per_rev > 0`, all position/velocity/acceleration values use engineering units:
+
+| Parameter | Units | Range | Notes |
+|-----------|-------|-------|-------|
+| **Position** | degrees | ±2,000,000° | Multi-revolution support (±5,555 revs) |
+| **Velocity** | deg/s | 0-360 deg/s typical | Converts to RPM for MKS, counts/s for RoboClaw |
+| **Acceleration** | deg/s² | 0-100 deg/s² typical | Converts to device-specific scale |
+
+### Examples
+
+**360° rotation at 60 RPM**:
+```csv
+[sequence]
+time_ms,endpoint_id,position,velocity,accel,mode
+0,1,0,360,50,pos
+1000,1,360,360,50,pos
+```
+
+**Continuous rotation**:
+```csv
+0,1,0,180,50,pos
+2000,1,720,180,50,pos     # 2 full revolutions
+4000,1,1440,180,50,pos    # 4 full revolutions
+```
+
+### Backwards Compatibility
+
+To maintain device units (old behavior), set `pulses_per_rev = 0` in endpoints.csv. The system will pass position/velocity/acceleration values directly to the hardware without conversion.
+
+### Homing and Zero Position
+
+The system supports auto-homing with limit switches:
+
+1. Set `has_limit_switch=1` in endpoints.csv
+2. Set `home_direction` (0=negative, 1=positive)
+3. Set `home_offset` (distance in pulses from limit to zero position)
+4. Run homing: Console command `home <endpoint_id>` or use Homing screen
+
+After homing, all position commands are relative to the zero position.
+
+## Console Commands Reference
+
+Connect via USB serial at 115200 baud. Commands are case-sensitive.
+
+### SD Card Commands
+- `sd dir` - List files on SD card
+- `sd read <path>` - Display file contents
+- `sd test` - Test SD card read/write performance
+
+### Configuration Commands
+- `config save` - Save current configuration to EEPROM
+- `config load endpoints` - Reload `/endpoints.csv` from SD card
+- `config show` - Display current configuration
+- `factory reset` - Reset to factory defaults (WARNING: erases config)
+
+### Endpoint Commands
+- `ep list` - Show all endpoint configurations
+- `ep show <id>` - Show detailed config for endpoint
+- `ep enable <id>` - Enable endpoint
+- `ep disable <id>` - Disable endpoint
+
+### Sequence Commands
+- `seq load` - Reload `/animation.csv` from SD card
+- `seq info` - Display sequence statistics (event count, duration)
+
+### RoboClaw Commands
+- `rc status <endpoint_id>` - Read encoder position and speed
+
+### CAN Bus Commands
+- `can status` - Display CAN bus health (error counters, fault state)
+
+### Homing Commands
+- `home <endpoint_id>` - Start auto-homing sequence for endpoint
+
+### System Commands
+- `reboot` - Restart controller
+- `help` - Display command list
 
 
 ### Hardware - Overall System

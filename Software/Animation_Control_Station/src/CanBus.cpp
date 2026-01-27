@@ -1,5 +1,7 @@
 #include "CanBus.h"
 #include "BoardPins.h"
+#include "Utils.h"
+#include "MksServoProtocol.h"
 #include <imxrt.h>
 #include <cstring>
 
@@ -43,14 +45,24 @@ void CanBus::enqueueRxLog(const CAN_message_t &msg) {
 }
 
 bool CanBus::popRxLog(CAN_message_t &msg) {
-  noInterrupts();
-  if (_rxLogTail == _rxLogHead) {
-    interrupts();
+  // Use shorter critical section instead of noInterrupts()
+  uint8_t head, tail;
+  __disable_irq();
+  head = _rxLogHead;
+  tail = _rxLogTail;
+  __enable_irq();
+
+  if (tail == head) {
     return false;
   }
-  msg = _rxLog[_rxLogTail];
-  _rxLogTail = static_cast<uint8_t>((_rxLogTail + 1) % kRxLogSize);
-  interrupts();
+
+  // Safe to access without interrupt protection (only written by IRQ)
+  msg = _rxLog[tail];
+
+  __disable_irq();
+  _rxLogTail = static_cast<uint8_t>((tail + 1) % kRxLogSize);
+  __enable_irq();
+
   return true;
 }
 
@@ -154,12 +166,12 @@ void CanBus::printHealth(Stream &out) {
 
 size_t CanBus::dumpRxLog(Stream &out, size_t max) {
   bool overflow = false;
-  noInterrupts();
+  __disable_irq();
   if (_rxLogOverflow) {
     overflow = true;
     _rxLogOverflow = false;
   }
-  interrupts();
+  __enable_irq();
 
   if (overflow) {
     out.println("CAN RX LOG OVERFLOW");
@@ -189,4 +201,88 @@ size_t CanBus::dumpRxLog(Stream &out, size_t max) {
     count++;
   }
   return count;
+}
+
+bool CanBus::requestMksServoStatus(uint16_t canId) {
+  // Request position from MKS Servo (0x30 command)
+  uint8_t data[1] = { MksServo::CMD_READ_POSITION };
+  return send(canId, data, 1);
+}
+
+bool CanBus::getMksServoStatus(uint16_t canId, MksServoStatus &status) {
+  uint8_t index = findServoIndex(canId);
+  if (index >= kMaxTrackedServos) {
+    return false;
+  }
+
+  const MksServoStatus &cached = _servoStatus[index];
+  if (!cached.valid) {
+    return false;
+  }
+
+  // Check if status is stale (>1 second old)
+  const uint32_t now = millis();
+  if ((now - cached.lastUpdateMs) > 1000) {
+    return false;
+  }
+
+  status = cached;
+  return true;
+}
+
+void CanBus::processRxFrames() {
+  CAN_message_t msg;
+  while (popRxLog(msg)) {
+    // Check if this is an MKS Servo position response
+    if (msg.len >= 4 && msg.buf[0] == MksServo::CMD_READ_POSITION) {
+      handleMksServoResponse(msg);
+    }
+    // Future: Add handlers for other CAN message types here
+  }
+}
+
+void CanBus::handleMksServoResponse(const CAN_message_t &msg) {
+  // Find or register this servo
+  uint8_t index = findServoIndex(msg.id);
+  if (index >= kMaxTrackedServos) {
+    index = registerServo(msg.id);
+  }
+  if (index >= kMaxTrackedServos) {
+    return;  // No space to track this servo
+  }
+
+  // Parse position response using MksServoProtocol
+  int32_t position = 0;
+  if (!MksServoProtocol::parsePositionResponse(msg.buf, msg.len, position)) {
+    return;  // Parse failed
+  }
+
+  // Update cached status
+  _servoStatus[index].position = position;
+  _servoStatus[index].valid = true;
+  _servoStatus[index].lastUpdateMs = millis();
+
+  // Future: Parse additional status fields (velocity, current, errors) if available
+}
+
+uint8_t CanBus::findServoIndex(uint16_t canId) {
+  for (uint8_t i = 0; i < _servoCount; i++) {
+    if (_servoCanIds[i] == canId) {
+      return i;
+    }
+  }
+  return kMaxTrackedServos;  // Not found
+}
+
+uint8_t CanBus::registerServo(uint16_t canId) {
+  if (_servoCount >= kMaxTrackedServos) {
+    return kMaxTrackedServos;  // No space
+  }
+
+  uint8_t index = _servoCount;
+  _servoCanIds[index] = canId;
+  _servoStatus[index] = MksServoStatus();  // Reset to defaults
+  _servoCount++;
+
+  return index;
 }

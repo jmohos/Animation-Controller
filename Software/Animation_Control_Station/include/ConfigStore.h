@@ -11,6 +11,14 @@ struct EndpointConfig {
   uint8_t motor = 1;       // RoboClaw motor (1=M1, 2=M2), 0 when unused
   uint32_t address = 0x80; // Device address / CAN ID
   uint8_t enabled = 1;
+
+  // Calibration and homing fields (NEW in version 7)
+  uint32_t pulsesPerRevolution = 0;  // 0 = use device defaults, enables engineering units
+  int32_t homeOffset = 0;            // Offset from limit switch to zero position (in pulses)
+  uint8_t homeDirection = 0;         // 0=negative, 1=positive direction for homing
+  uint8_t hasLimitSwitch = 0;        // 0=no homing, 1=has limit switch
+
+  // Position/velocity/acceleration limits (engineering units when pulsesPerRevolution > 0)
   int32_t positionMin = 0;
   int32_t positionMax = 0;
   uint32_t velocityMin = 0;
@@ -53,5 +61,5 @@ public:
 
 private:
   static constexpr uint32_t kMagic = 0x43464731; // "CFG1"
-  static constexpr uint16_t kVersion = 6;
+  static constexpr uint16_t kVersion = 7;  // Version 7: Added calibration and homing fields
 };

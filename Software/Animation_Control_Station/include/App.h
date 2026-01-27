@@ -51,6 +51,7 @@ public:
 
 private:
   void pollRoboClaws();
+  void pollCanEndpoints();
   void stopRoboClaws();
   void saveAnimationEdits();
   bool getEditEvent(SequenceEvent &event, uint16_t &ordinal, uint16_t &count);
@@ -104,4 +105,9 @@ private:
   RoboClawStatus _rcStatus;
   bool _rcStatusValid = false;
   uint32_t _lastRcPollMs = 0;
+  // CAN endpoint status tracking
+  MksServoStatus _canStatusByEndpoint[MAX_ENDPOINTS] = {};
+  bool _canStatusByEndpointValid[MAX_ENDPOINTS] = {};
+  uint8_t _canPollIndex = 0;
+  uint32_t _lastCanPollMs = 0;
 };

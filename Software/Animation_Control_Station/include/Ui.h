@@ -96,6 +96,10 @@ enum class EndpointField : uint8_t {
   VelocityMax,
   AccelMin,
   AccelMax,
+  PulsesPerRev,
+  HomeOffset,
+  HomeDirection,
+  HasLimitSwitch,
   Count
 };
 
