@@ -1,0 +1,58 @@
+The ODESC_V4.2 motor controller is a clone of an older Odrive board.
+This clone is based on the V3.6 of Odrive when it came out.
+The matching version of odrivetool to configure it is V0.5.1.
+The closest instructions for this are the V0.5.6 instructions here: https://docs.odriverobotics.com/v/0.5.6/getting-started.html#upgrading-from-0-4-12
+
+The vendor for the clone, sequremall has a tutorial here:
+Following the steps in this tutorial: https://sequremall.com/blogs/odesc-tutorial
+
+
+1. Install python 3.10.11 for windows as admin by selecting "Install for all users" in the custom settings.
+Ensure to check "Add to path" option.
+Just install on top of whatever you might have on windows.
+
+odrivetool breaks with newer versions.
+2. In cmd as admin, python --version to confirm it working.
+You should see "Python 3.10.11"
+
+3. Install odrive and ipython
+In cmd window, run "python -m pip install odrive==0.5.1.post0 ipython"
+
+4. Odrive if now ready to run but it might fail without a Zadig driver.
+Test running with:
+"C:\Program Files\Python310\python.exe" -m odrive.tools.odrivetool
+
+5. Connect the ODESC to USB and power the board.
+
+6. Run Zadig, Options/List All Devices, find "ODrive 3.6 Native Interface (Interface 2)
+Select libusb-win32 in the window right of the green arrow.
+Hit "Replace Driver" button.
+Close Zadig
+
+7. Run in cmd admin, "odrivetool"
+
+Confirm it find device odrv0.
+Get the HW version using: "odrv0.hw_version_variant"
+
+8. Follow the setup instructions for hall speed mode.
+
+9. Use the manual tuning process documented here: https://docs.odriverobotics.com/v/0.5.6/control.html#tuning
+
+10. Manually tuned to:
+
+odrv0.axis0.controller.config.vel_gain = 0.1
+odrv0.axis0.controller.config.vel_integrator_gain = 0.5
+
+
+
+Sources for info:
+1. Vortecks Youtube channel on "Sequre ODESC 4.1 ODrive motor controller info"
+
+2. To dump all of the current errors: "dump_errors(odrv0)"
+
+3. To drive in velocity mode: "odrv0.axis0.controller.input_vel = 5"
+
+4. To live plot the position: "start_liveplotter(lambda: [odrv0.axis0.encoder.pos_estimate])"
+
+
+
