@@ -42,7 +42,19 @@ static constexpr uint8_t PIN_POT_ACCEL = A17;
 static constexpr uint8_t PIN_ENC_A = 5;
 static constexpr uint8_t PIN_ENC_B = 4;
 
-// AnimCom RS485 bus master on Serial2
-static constexpr uint8_t PIN_ANIMCOM_RX = 7;
-static constexpr uint8_t PIN_ANIMCOM_TX = 8;
-static constexpr uint8_t PIN_ANIMCOM_DE = 6;
+// ---------------- RS422 ports ----------------
+struct Rs422PortPins {
+    uint8_t rx;
+    uint8_t tx;
+};
+
+static constexpr Rs422PortPins ROBOCLAW_PORT_PINS[8] = {
+    /*1*/ { 0,  1},
+    /*2*/ { 7,  8},
+    /*3*/ {15, 14},
+    /*4*/ {16, 17},
+    /*5*/ {21, 20},
+    /*6*/ {25, 24},
+    /*7*/ {28, 29},
+    /*8*/ {34, 35},
+};

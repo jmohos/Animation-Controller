@@ -9,8 +9,8 @@ The endpoint mapping for the controller shall be captured as a static configurat
 | 1         | 0      | Left Pinwheel  | Speed Percent | -100, 100 |
 | 2         | 0      | Right Pinwheel | Speed Percent | -100, 100 |
 | 3         | 0      | Generator      | Speed deg/sec | 0, 720    |
-| 4         | 0      | Crane Pivot    | Position deg  | 0, 180    |
-| 4         | 1      | Crane Winch    | Position deg  | 0, 360    |
+| 4         | 0      | Crane Winch    | Position deg  | 0, 1800   |
+| 4         | 2      | Crane Switch   | Position deg  | 0, 360    |
 | 5         | 0      | Flower Pivot   | Position deg  | 0, 180    |
 | 5         | 1      | Light Pivot    | Position deg  | 0, 360    |
 | 6         | 0      | Robot Head     | Position deg  | 0, 180    |
@@ -81,8 +81,8 @@ An example for MANUAL_HOLD is to present the following as selectable items:
 "LEFT PINWHEELS"
 "RIGHT PINWHEELS"
 "GENERATOR"
-"CRANE PIVOT"
 "CRANE WINCH"
+"CRANE SWITCH"
 "FLOWER PIVOT"
 "LIGHT PIVOT"
 "ROBOT HEAD"

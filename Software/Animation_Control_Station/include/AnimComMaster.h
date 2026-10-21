@@ -5,7 +5,7 @@
 
 class AnimComMaster {
 public:
-    void begin(HardwareSerial& port, uint8_t dePin, uint32_t baud = ANIMCOM_BAUD);
+    void begin(HardwareSerial* const* ports, uint8_t portCount, uint32_t baud = ANIMCOM_BAUD);
 
     void sendControlState(uint8_t stationId,
                           uint8_t state,
@@ -29,10 +29,10 @@ public:
 
 private:
     static constexpr uint32_t ANIMCOM_BAUD = 115200;
-    static constexpr uint32_t DE_SETTLE_US = 50;
+    static constexpr uint8_t  MAX_PORTS    = 8;
 
-    HardwareSerial* _port = nullptr;
-    uint8_t _dePin = 0;
+    HardwareSerial* _ports[MAX_PORTS] = {};
+    uint8_t _portCount = 0;
     uint8_t _seq = 0;
     uint32_t _txFrames = 0;
 

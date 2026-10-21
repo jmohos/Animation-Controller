@@ -2,20 +2,16 @@
 
 #include <Arduino.h>
 
-void AnimComMaster::begin(HardwareSerial& port, uint8_t dePin, uint32_t baud)
+void AnimComMaster::begin(HardwareSerial* const* ports, uint8_t portCount, uint32_t baud)
 {
-    _port = &port;
-    _dePin = dePin;
+    _portCount = (portCount > MAX_PORTS) ? MAX_PORTS : portCount;
     _seq = 0;
 
-    pinMode(_dePin, OUTPUT);
-    digitalWrite(_dePin, LOW);
-
-    _port->begin(baud);
-
-    Serial.printf("[AnimComMaster] RS485 master ready  baud=%lu  dePin=%d\n",
-                  (unsigned long)baud,
-                  dePin);
+    for (uint8_t i = 0; i < _portCount; i++) {
+        _ports[i] = ports[i];
+        _ports[i]->begin(baud);
+        Serial.printf("[AnimComMaster] port %u ready  baud=%lu\n", i + 1, (unsigned long)baud);
+    }
 }
 
 void AnimComMaster::sendControlState(uint8_t stationId,
@@ -97,15 +93,14 @@ void AnimComMaster::sendManualBulk(uint8_t stationId, const int8_t speeds[ANIMCO
 
 void AnimComMaster::_transmit(const uint8_t* buf, uint8_t len)
 {
-    if (!_port || len == 0) {
+    if (_portCount == 0 || len == 0) {
         return;
     }
 
-    digitalWrite(_dePin, HIGH);
-    _port->write(buf, len);
-    _port->flush();
-    delayMicroseconds(DE_SETTLE_US);
-    digitalWrite(_dePin, LOW);
+    for (uint8_t i = 0; i < _portCount; i++) {
+        _ports[i]->write(buf, len);
+        _ports[i]->flush();
+    }
 
     _txFrames++;
 }

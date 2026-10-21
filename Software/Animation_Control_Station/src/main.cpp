@@ -73,7 +73,8 @@ void App::begin() {
   _analogs.begin();
   _enc.begin(PIN_ENC_A, PIN_ENC_B);
   _ui.begin();
-  _animcom.begin(Serial2, PIN_ANIMCOM_DE);
+  HardwareSerial* const animcomPorts[] = { &Serial1, &Serial2 };
+  _animcom.begin(animcomPorts, 2);
 
   for (uint8_t i = 0; i < kStaticItemCount; i++) {
     _manualValues[i] = kStaticItems[i].defaultValue;
@@ -212,6 +213,8 @@ void App::handleManualHoldButtons(const ButtonState &buttonState) {
     moveManualSelection(-1, 0);
   } else if (buttonState.justPressed(Button::BUTTON_RIGHT)) {
     moveManualSelection(1, 0);
+  } else if (buttonState.justPressed(Button::BUTTON_OK)) {
+    setControllerMode(ControllerMode::ManualRun, true);
   }
 }
 
