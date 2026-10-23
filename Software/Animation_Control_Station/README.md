@@ -19,6 +19,7 @@ The endpoint mapping for the controller shall be captured as a static configurat
 | 8         | 0      | Tesla Ring     | Position deg  | 0, 360    |
 | 8         | 1      | Lion Tilt      | Position deg  | 0, 90     |
 | 8         | 2      | Lion Hair      | Position deg  | 0, 45     |
+| 9         | 2      | Sign Flipper   | Position deg  | 0, 90     |
 
 ## Animation Control Communications Protocol
 The animation controller shall repeatedly send messages to all of the animation stations using a shared RS485 interface.
